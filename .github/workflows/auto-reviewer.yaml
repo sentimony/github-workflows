@@ -1,4 +1,4 @@
-name: Claude Review
+name: Auto Reviewer
 
 # Posts a cr-request PR review as yngwald on each open, non-draft, same-repo PR with green CI.
 # Automatic repeats need a new head and prior Critical/Important findings, up to the effective
@@ -6,7 +6,7 @@ name: Claude Review
 # writes review transport files. Only trusted publish steps receive the yngwald PAT to post the
 # validated review and recover ledger actions. Pull_request runs use the PR branch's workflow,
 # so anyone who can push a branch can reach the PAT. Checks validate structure and token-like
-# strings, not prose; the `Claude review` status is advisory, not a required check.
+# strings, not prose; the `Auto Reviewer` status is advisory, not a required check.
 on:
   workflow_call:
     inputs:
@@ -456,7 +456,7 @@ jobs:
           EVENT_PR: ${{ github.event.pull_request.number || inputs.pr || inputs.pr_number }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
-          CONTEXT: Claude review
+          CONTEXT: Auto Reviewer
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [[ ! "$REQUIRED_CI_JOB" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]; then
@@ -635,7 +635,7 @@ jobs:
             fi
           fi
 
-          post_status pending "Claude review in progress"
+          post_status pending "Auto Reviewer in progress"
 
           echo "Review PR #$number at $head_sha" | tee -a "$GITHUB_STEP_SUMMARY"
           {
@@ -646,7 +646,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   review:
-    name: Claude review
+    name: Auto Reviewer
     needs: gate
     if: needs.gate.outputs.review == 'true'
     runs-on: ubuntu-latest
@@ -1169,7 +1169,7 @@ jobs:
           include-hidden-files: true
 
   publish:
-    name: Publish Claude review
+    name: Publish Auto Reviewer
     outputs:
       requests: ${{ steps.ledger.outputs.requests }}
       review_id: ${{ steps.post.outputs.review_id }}
@@ -1193,7 +1193,7 @@ jobs:
       NUMBER: ${{ needs.gate.outputs.number }}
       HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
       MARKER: '<!-- claude-review sha=${{ needs.gate.outputs.head_sha }} -->'
-      CONTEXT: Claude review
+      CONTEXT: Auto Reviewer
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       BODY_FILE: review-out/review.md
       COMMENTS_FILE: review-out/comments.json
@@ -1317,10 +1317,10 @@ jobs:
           # A failed read leaves no status behind otherwise, so it reports an error under this run's URL.
           latest=$(gh api "repos/$REPO/commits/$HEAD_SHA/status?per_page=100" \
             --jq '[.statuses[] | select(.context == env.CONTEXT)][0].target_url // ""') \
-            || { post_status error "Could not read the Claude review status"; exit 1; }
+            || { post_status error "Could not read the Auto Reviewer status"; exit 1; }
           [ "$latest" = "$RUN_URL" ] || { echo "Status owned by another run: ${latest:-none}"; exit 0; }
           if [ "$JOB_STATUS" = cancelled ]; then
-            post_status error "Claude review was cancelled"
+            post_status error "Auto Reviewer was cancelled"
             exit 0
           fi
 
@@ -1330,10 +1330,10 @@ jobs:
               head=$(gh api "repos/$REPO/pulls/$NUMBER" --jq .head.sha) \
                 || { post_status error "Could not read the PR head"; exit 1; }
               [ "$head" = "$HEAD_SHA" ] || { post_status error "Superseded by a newer head"; exit 0; }
-              post_status error "Claude review was cancelled"
+              post_status error "Auto Reviewer was cancelled"
               exit 0
             fi
-            post_status failure "Claude review failed before writing a review"
+            post_status failure "Auto Reviewer failed before writing a review"
             exit 1
           fi
 
@@ -2116,7 +2116,7 @@ jobs:
           PYCODE
 
   complete:
-    name: Complete Claude review actions
+    name: Complete Auto Reviewer actions
     needs: [gate, publish, resolve_threads]
     if: always() && needs.gate.outputs.review == 'true'
     runs-on: ubuntu-latest
@@ -2130,7 +2130,7 @@ jobs:
       NUMBER: ${{ needs.gate.outputs.number }}
       HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
       MARKER: '<!-- claude-review sha=${{ needs.gate.outputs.head_sha }} -->'
-      CONTEXT: Claude review
+      CONTEXT: Auto Reviewer
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       ACTIONS_FILE: completion-actions.json
       POST_FILE: completion-post.md
@@ -2631,7 +2631,7 @@ jobs:
           # A run cancelled by a newer one keeps its hands off the status the newer gate set.
           latest=$(gh api "repos/$REPO/commits/$HEAD_SHA/status?per_page=100" \
             --jq '[.statuses[] | select(.context == env.CONTEXT)][0].target_url // ""') \
-            || { post_status error "Could not read the Claude review status"; exit 1; }
+            || { post_status error "Could not read the Auto Reviewer status"; exit 1; }
           [ "$latest" = "$RUN_URL" ] || { echo "Status owned by another run: ${latest:-none}"; exit 0; }
           # A cancel may cut the post step short after the POST landed. Only then look the review up, and
           # only among reviews submitted after this run validated its body, so an earlier review of the
@@ -2646,7 +2646,7 @@ jobs:
             REVIEW_ID=""
           fi
           if [ -z "$REVIEW_ID" ] && [ "$JOB_STATUS" = cancelled ]; then
-            post_status error "Claude review was cancelled"
+            post_status error "Auto Reviewer was cancelled"
             exit 0
           fi
           if [ -z "$REVIEW_ID" ]; then

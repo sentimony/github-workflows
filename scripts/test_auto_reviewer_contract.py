@@ -7,7 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / 'scripts/check_auto_reviewer_contract.py'
 WORKFLOW = ROOT / '.github/workflows/auto-reviewer.yaml'
-CALLER = '''name: Claude Review
+CALLER = '''name: Auto Reviewer
 on: [workflow_dispatch]
 permissions:
   actions: read

@@ -1,7 +1,7 @@
-# Shared auto reviewer
+# Auto Reviewer
 
 The reusable workflow posts Claude reviews for eligible pull requests after CI. Its
-`Claude review` commit status is advisory. The caller workflow name identifies the
+`Auto Reviewer` commit status is advisory. The caller workflow name identifies the
 workflow; `required-ci-job` names the CI job checked by the gate. These are separate
 names.
 
@@ -44,7 +44,7 @@ against the new callee. Update both pins when adopting a new central version.
 Agentic workflow (`validate`):
 
 ```yaml
-name: Claude Review
+name: Auto Reviewer
 on:
   workflow_run:
     workflows: [CI]
@@ -82,7 +82,7 @@ jobs:
 SoundCloud catalog (`check`):
 
 ```yaml
-name: Auto review
+name: Auto Reviewer
 on:
   workflow_run:
     workflows: [CI]

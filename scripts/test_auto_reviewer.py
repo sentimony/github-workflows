@@ -11,7 +11,7 @@ ADAPTER = {
     'reviewer': 'yngwald',
     'secret': 'YNGWALD_PR_TOKEN',
     'workflow': '.github/workflows/auto-reviewer.yaml',
-    'name': 'Claude Review',
+    'name': 'Auto Reviewer',
     'dispatch': 'pr',
     'jobs': ['validate'],
     'events': ['push', 'workflow_dispatch'],
@@ -684,7 +684,7 @@ class ResolverRunTest(unittest.TestCase):
         extra={'GH_TOKEN':'fixture-status','POST_OUTCOME':'success','LEDGER_OUTCOME':'skipped',
                'DEFERRED_COMPLETE':'','SIGNATURE':'Reviewed with: `/cr-request`','SUMMARY':'pending actions',
                'STATE':'failure','VALIDATED_AT':'2026-10-30T00:00:00Z','JOB_STATUS':'success',
-               'CONTEXT':'Claude review','RUN_URL':'https://github.com/owner/repo/actions/runs/303',
+               'CONTEXT':'Auto Reviewer','RUN_URL':'https://github.com/owner/repo/actions/runs/303',
                'MARKER':'<!-- claude-review sha='+('a'*40)+' -->'}
         result=self.run_step('Report review status',**extra)
         self.assertNotEqual(result.returncode,0,result.stderr)
@@ -796,7 +796,7 @@ class PublicationFailureTest(unittest.TestCase):
                 fake.chmod(0o755)
                 env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],
                     'CURRENT':current,'TRACE':str(root/'trace'),'REPO':'owner/repo',
-                    'HEAD_SHA':'a'*40,'CONTEXT':'Claude review','RUN_URL':'run'}
+                    'HEAD_SHA':'a'*40,'CONTEXT':'Auto Reviewer','RUN_URL':'run'}
                 result=subprocess.run(['bash','-eo','pipefail','-c',item['run']],env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertEqual((root/'trace').exists(),expected)
@@ -1088,7 +1088,7 @@ sys.exit(2)
                  'REQUIRED_CI_JOB': required_jobs[0] if ci_job is None else ci_job,
                  'CLAUDE_REVIEW_MAX_ROUNDS':max_rounds,'CI_EVENTS':json.dumps(source_events),
                  'SKIPPABLE_JOBS':json.dumps(skippable_jobs),
-                 'EVENT_PR':event_pr,'EVENT_NAME':event,'EVENT_ACTION':action,'CONTEXT':'Claude review',
+                 'EVENT_PR':event_pr,'EVENT_NAME':event,'EVENT_ACTION':action,'CONTEXT':'Auto Reviewer',
                  'RUN_URL':'url','GITHUB_OUTPUT':str(root/'output'),'GITHUB_STEP_SUMMARY':str(root/'summary')}
             source=step('Review gate decision')
             if total_override is not None:

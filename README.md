@@ -129,5 +129,6 @@ python3 scripts/check_auto_reviewer_contract.py --workflow .github/workflows/aut
 
 Use `check` for the SoundCloud caller. The checker needs Ruby 3 or later; set `RUBY` to
 its executable when needed. It reads the callee schema and job permissions. It does not
+verify the caller's `uses` target, ref, or pin; verify those separately. It also does not
 contact GitHub, inspect secret expression internals, or verify repository secret
 availability and runtime values.

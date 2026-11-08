@@ -1092,7 +1092,9 @@ sys.exit(2)
                  'RUN_URL':'url','GITHUB_OUTPUT':str(root/'output'),'GITHUB_STEP_SUMMARY':str(root/'summary')}
             source=step('Review gate decision')
             if total_override is not None:
-                source=source.replace('total=$(jq -s length <<< "$reviews")', 'total='+str(total_override))
+                needle='total=$(jq -s length <<< "$reviews")'
+                assert source.count(needle) == 1
+                source=source.replace(needle, 'total='+str(total_override), 1)
             result=subprocess.run(['bash','-eo','pipefail','-c',source],env=env,capture_output=True,text=True)
             output=(root/'output').read_text() if (root/'output').exists() else ''
             result.api_called=(root/'api-called').exists()

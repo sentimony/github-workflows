@@ -50,7 +50,7 @@ Release tags are immutable: never move or recreate one. For later changes, creat
 patch tag on the merged central commit, push it to origin, confirm it resolves, and
 update callers to that exact tag before merging their changes.
 
-This repository's `.github/workflows/auto-reviewer-self.yaml` calls the published
+This repository's `.github/workflows/self-auto-reviewer.yaml` calls the published
 reusable workflow in `.github/workflows/auto-reviewer.yaml` with the `validate` CI job.
 Configure Actions secrets in each consumer repository:
 

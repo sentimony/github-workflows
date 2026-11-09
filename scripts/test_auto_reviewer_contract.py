@@ -44,7 +44,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_self_caller_matches_callee_contract(self):
-        path = ROOT / '.github/workflows/auto-reviewer-self.yaml'
+        path = ROOT / '.github/workflows/self-auto-reviewer.yaml'
         caller = path.read_text()
         result = self.check(caller=caller)
         self.assertEqual(result.returncode, 0, result.stderr)

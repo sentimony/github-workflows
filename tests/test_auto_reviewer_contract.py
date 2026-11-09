@@ -81,7 +81,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(set(workflow['jobs']), {'auto_review'})
         job = workflow['jobs']['auto_review']
         self.assertEqual(job['uses'],
-                         'sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.3')
+                         'sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@1a0e98e59aa772bb4c0b77d2dc4d2f9c6110e04e')
         self.assertNotIn('concurrency', job)
         self.assertEqual(job['secrets']['AUTO_REVIEWER_YNGWALD'],
                          '${{ secrets.AUTO_REVIEWER_YNGWALD }}')

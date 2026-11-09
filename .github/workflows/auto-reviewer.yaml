@@ -269,7 +269,7 @@ jobs:
                   sys.exit(0)
               all_threads=threads()
               valid=[]; unknown=False; review_durations=[]; usages=[]
-              usage_re=re.compile(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` [^\n]+) skill · In [0-9]+ min [0-9]+ sec(?: · `?([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)`? · ([0-9]+(?:,[0-9]{3})*) tokens · \$([0-9]+\.[0-9]{4}))?$',re.M)
+              usage_re=re.compile(r'^Reviewed with: (?:`auto-reviewer\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*` workflow · )?(?:`cr-request@v[0-9.]+`|`/cr-request` [^\n]+) skill · In [0-9]+ min [0-9]+ sec(?: · `?([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)`? · ([0-9]+(?:,[0-9]{3})*) tokens · \$([0-9]+\.[0-9]{4}))?$',re.M)
               for r in reviews:
                   review_durations.append(None)
                   found_usage=usage_re.findall(r.get('body') or '')
@@ -284,7 +284,7 @@ jobs:
                       review_durations[-1]=d['duration_seconds']
                   except (Stop, ValueError, KeyError, TypeError):
                       unknown=True
-                      signature=re.findall(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` [^\n]+) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',r.get('body') or '',re.M)
+                      signature=re.findall(r'^Reviewed with: (?:`auto-reviewer\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*` workflow · )?(?:`cr-request@v[0-9.]+`|`/cr-request` [^\n]+) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',r.get('body') or '',re.M)
                       if len(signature)==1 and int(signature[0][1])<60: review_durations[-1]=int(signature[0][0])*60+int(signature[0][1])
               durations=[d for d in review_durations if d is not None]
               origins={}
@@ -675,6 +675,7 @@ jobs:
     # The agent can write the body file, so publish takes the version from here, not the artifact.
     outputs:
       version: ${{ steps.skill.outputs.version }}
+      workflow_identity: ${{ steps.workflow_identity.outputs.identity }}
       threads_digest: ${{ steps.threads.outputs.digest }}
     env:
       NUMBER: ${{ needs.gate.outputs.number }}
@@ -877,6 +878,27 @@ jobs:
             echo "effort=$EFFORT"
           } >> "$GITHUB_OUTPUT"
 
+      # job.workflow_ref identifies this reusable workflow, while github.workflow_ref identifies its caller.
+      - name: Resolve workflow identity
+        id: workflow_identity
+        env:
+          # JSON round-trip supports the new job property with older actionlint context schemas.
+          WORKFLOW_REF: ${{ fromJSON(toJSON(job)).workflow_ref }}
+        run: |
+          python3 -I - <<'PYCODE'
+          import os, re, sys
+          source, separator, ref = os.environ['WORKFLOW_REF'].rpartition('@')
+          for prefix in ('refs/tags/', 'refs/heads/'):
+              if ref.startswith(prefix):
+                  ref = ref[len(prefix):]
+                  break
+          if (not separator or source.rsplit('/', 1)[-1] != 'auto-reviewer.yaml'
+                  or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,255}', ref)):
+              sys.exit('Cannot determine a safe reusable workflow identity')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write('identity=auto-reviewer.yaml@' + ref + '\n')
+          PYCODE
+
       - uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1
         id: claude
         with:
@@ -1023,7 +1045,7 @@ jobs:
             ` -> ` in these two lines are the required format, not dashes. Write the signature without
             a duration; the workflow appends the review duration to it afterwards as ` · In <m> min <s> sec`.
             The signature line:
-            Reviewed with: `cr-request@v${{ steps.skill.outputs.version }}` skill
+            Reviewed with: `${{ steps.workflow_identity.outputs.identity }}` workflow · `cr-request@v${{ steps.skill.outputs.version }}` skill
           # Reads stay in the workspace and the installed skill, so injected PR text cannot steer the agent
           # to runner files or /proc and copy a token into the body. Grep and Glob are allowed bare: the
           # blockReadsOutsideWorkingDirectories setting, not a path rule, refuses them outside the
@@ -1049,7 +1071,7 @@ jobs:
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
           USAGE_MODEL: ${{ steps.model.outputs.model }}
           USAGE_EFFORT: ${{ steps.model.outputs.effort }}
-          SIGNATURE: 'Reviewed with: `cr-request@v${{ steps.skill.outputs.version }}` skill'
+          SIGNATURE: 'Reviewed with: `${{ steps.workflow_identity.outputs.identity }}` workflow · `cr-request@v${{ steps.skill.outputs.version }}` skill'
           SEP: ' · '
         run: |
           body=.auto-review/review.md
@@ -1322,6 +1344,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           REVIEW_RESULT: ${{ needs.review.result }}
           VERSION: ${{ needs.review.outputs.version }}
+          WORKFLOW_IDENTITY: ${{ needs.review.outputs.workflow_identity }}
         run: |
           post_status() {
             gh api "repos/$REPO/statuses/$HEAD_SHA" -f state="$1" -f description="$2" \
@@ -1372,7 +1395,10 @@ jobs:
           tail2=$(tr -d '\r' < "$BODY_FILE" | grep -v '^[[:space:]]*$' | tail -n 2 | sed 's/[[:space:]]*$//' || true)
           prev=$(head -n 1 <<< "$tail2")
           last=$(tail -n 1 <<< "$tail2")
-          signature_re="^Reviewed with: (\`cr-request@v${VERSION//./\\.}\`|\`/cr-request\` ${VERSION//./\\.}) skill · In [0-9]+ min [0-9]+ sec( · (\`[a-z0-9][a-z0-9._:/-]*(\\[[a-z0-9]+\\])? (low|medium|high)\` · (0|[1-9][0-9]?[0-9]?(,[0-9][0-9][0-9])*)|[a-z0-9][a-z0-9._:/-]*(\\[[a-z0-9]+\\])? (low|medium|high) · [0-9]+) tokens · \\\$[0-9]+\\.[0-9]{4})?\$"
+          [[ "${WORKFLOW_IDENTITY:-}" =~ ^auto-reviewer\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] \
+            || fail "Missing or invalid reusable workflow identity"
+          workflow_prefix="\`${WORKFLOW_IDENTITY//./\\.}\` workflow · "
+          signature_re="^Reviewed with: ${workflow_prefix}(\`cr-request@v${VERSION//./\\.}\`|\`/cr-request\` ${VERSION//./\\.}) skill · In [0-9]+ min [0-9]+ sec( · (\`[a-z0-9][a-z0-9._:/-]*(\\[[a-z0-9]+\\])? (low|medium|high)\` · (0|[1-9][0-9]?[0-9]?(,[0-9][0-9][0-9])*)|[a-z0-9][a-z0-9._:/-]*(\\[[a-z0-9]+\\])? (low|medium|high) · [0-9]+) tokens · \\\$[0-9]+\\.[0-9]{4})?\$"
           # CI FooterTest executes this footer grammar against valid and invalid sample bodies.
           next_re="^Next step: (\`/[a-z0-9-]+( [^\`[:space:]]+)*\`( -> \`/[a-z0-9-]+\`( [a-z0-9-]+)?)?( · [^[:space:]].*)?|none( · [^[:space:]].*)?)\$"
           if [[ "$prev" =~ $signature_re ]] && [[ "$last" =~ $next_re ]]; then
@@ -1751,7 +1777,7 @@ jobs:
               marker='<!-- claude-review-ledger:v1 '+encoded(envelope)+' -->'
               # Keep the marker before the existing footer, outside the single details block.
               lines=Path(os.environ['POST_FILE']).read_text(encoding='utf-8').splitlines()
-              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
+              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Reviewed with: `auto-reviewer.yaml@', 'Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
               require(idx is not None,'review footer unavailable')
               body='\n'.join(lines[:idx]+[marker]+lines[idx:])+'\n'
               require(len(body.encode())<=65536,'ledger exceeds review body limit')
@@ -1845,7 +1871,7 @@ jobs:
               d['review_source_id']=review_id
               for f in d['findings']: f['origin_review_id']=review_id
               signature=Path(os.environ['POST_FILE']).read_text(encoding='utf-8')
-              m=re.search(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` .*) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',signature,re.M)
+              m=re.search(r'^Reviewed with: (?:`auto-reviewer\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*` workflow · )?(?:`cr-request@v[0-9.]+`|`/cr-request` .*) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',signature,re.M)
               duration=int(m[1])*60+int(m[2]) if m else None
               d.update(envelope_version=1,published_review_id=review_id,run_id=run_id,duration_seconds=duration,
                        action_progress=[],disposition_events=events)
@@ -2412,7 +2438,7 @@ jobs:
               marker='<!-- claude-review-ledger:v1 '+encoded(envelope)+' -->'
               # Keep the marker before the existing footer, outside the single details block.
               lines=Path(os.environ['POST_FILE']).read_text(encoding='utf-8').splitlines()
-              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
+              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Reviewed with: `auto-reviewer.yaml@', 'Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
               require(idx is not None,'review footer unavailable')
               body='\n'.join(lines[:idx]+[marker]+lines[idx:])+'\n'
               require(len(body.encode())<=65536,'ledger exceeds review body limit')
@@ -2506,7 +2532,7 @@ jobs:
               d['review_source_id']=review_id
               for f in d['findings']: f['origin_review_id']=review_id
               signature=Path(os.environ['POST_FILE']).read_text(encoding='utf-8')
-              m=re.search(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` .*) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',signature,re.M)
+              m=re.search(r'^Reviewed with: (?:`auto-reviewer\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*` workflow · )?(?:`cr-request@v[0-9.]+`|`/cr-request` .*) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',signature,re.M)
               duration=int(m[1])*60+int(m[2]) if m else None
               d.update(envelope_version=1,published_review_id=review_id,run_id=run_id,duration_seconds=duration,
                        action_progress=[],disposition_events=events)

@@ -269,9 +269,10 @@ jobs:
                   sys.exit(0)
               all_threads=threads()
               valid=[]; unknown=False; durations=[]; usages=[]
-              usage_re=re.compile(r'^Reviewed with: `/cr-request` [^\n]+ skill · In [0-9]+ min [0-9]+ sec(?: · ([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high) · ([0-9]+) tokens · \$([0-9]+\.[0-9]{4}))?$',re.M)
+              usage_re=re.compile(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` [^\n]+) skill · In [0-9]+ min [0-9]+ sec(?: · `?([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)`? · ([0-9]+(?:,[0-9]{3})*) tokens · \$([0-9]+\.[0-9]{4}))?$',re.M)
               for r in reviews:
                   found_usage=usage_re.findall(r.get('body') or '')
+                  found_usage=[(m,e,n.replace(',',''),c) for m,e,n,c in found_usage]
                   usages.append(found_usage[0] if len(found_usage)==1 and found_usage[0][0] else None)
                   raw=ledger_re.findall(r.get('body') or '')
                   try:
@@ -282,7 +283,7 @@ jobs:
                       if d['duration_seconds'] is not None: durations.append(d['duration_seconds'])
                   except (Stop, ValueError, KeyError, TypeError):
                       unknown=True
-                      signature=re.findall(r'^Reviewed with: `/cr-request` [^\n]+ skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',r.get('body') or '',re.M)
+                      signature=re.findall(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` [^\n]+) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',r.get('body') or '',re.M)
                       if len(signature)==1 and int(signature[0][1])<60: durations.append(int(signature[0][0])*60+int(signature[0][1]))
               origins={}
               for r,d in valid:
@@ -995,22 +996,22 @@ jobs:
             Never copy a token or secret into the body or the comments. Write GitHub logins, team names, and any
             other text that starts with @ inside backticks, so the posted review notifies nobody.
             End the body with the two closing lines specified by this workflow: the signature line
-            below, backticks included, then the `Next step` line as the very last line. In that line each skill
-            is inline code with a leading slash, its arguments inside the code span, and ` · ` goes before a
+            below, backticks included, then the `Next step` line as the very last line. Put the complete command
+            chain, including arguments and arrows, inside one code span with leading slashes. ` · ` goes before a
             reason; pick the line by the result:
             - Findings, or a previous yngwald finding left not addressed, with no reason:
               `` Next step: `/cr-received PR #${{ needs.gate.outputs.number }}` ``
             - No findings (a `Verify` line names a fingerprint without the record host, never this Tree):
-              ``Next step: `/verify <plan path>` -> `/finalize` squash``, where the plan path is the plan
+              Next step: `/verify <plan path> -> /finalize squash`, where the plan path is the plan
               the PR description names, else a file under `docs/plans/` in diff.patch; with no plan found,
-              ``Next step: `/verify` -> `/finalize` squash``. `squash` recommends the merge method.
+              Next step: `/verify -> /finalize squash`. `squash` recommends the merge method.
             - Any other result: ``Next step: `/<skill>` · <reason>``; `none` stays plain text
               (`Next step: none · <reason>`).
             The publish step cuts the reason after ` · ` and leaves the first two forms whole. The ` · ` and
             ` -> ` in these two lines are the required format, not dashes. Write the signature without
             a duration; the workflow appends the review duration to it afterwards as ` · In <m> min <s> sec`.
             The signature line:
-            Reviewed with: `/cr-request` ${{ steps.skill.outputs.version }} skill
+            Reviewed with: `cr-request@v${{ steps.skill.outputs.version }}` skill
           # Reads stay in the workspace and the installed skill, so injected PR text cannot steer the agent
           # to runner files or /proc and copy a token into the body. Grep and Glob are allowed bare: the
           # blockReadsOutsideWorkingDirectories setting, not a path rule, refuses them outside the
@@ -1026,9 +1027,9 @@ jobs:
       # The duration is the agent step's wall time; the agent cannot measure it. Only the signature line
       # among the last two non-blank lines is rewritten, so a quoted signature higher up stays as written;
       # anything the agent put after the signature and a space there is replaced by the measured duration.
-      # Under a minute it reads `In 0 min 42 sec`. The same step appends the usage the action recorded,
-      # ` · <model> <effort> · <n> tokens · $<cost>`, read from the result message of its execution file
-      # (tokens are input, output, and cache tokens together); a missing or unreadable file adds nothing,
+      # Under a minute it reads `In 0 min 42 sec`. Usage comes from the result message in the action's
+      # execution file. Model and effort share one code span, followed by comma-grouped tokens and cost.
+      # Tokens include input, output, and cache tokens; a missing or unreadable file adds nothing,
       # and the merged summary then shows the usage as unknown.
       - name: Add review duration
         env:
@@ -1036,7 +1037,7 @@ jobs:
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
           USAGE_MODEL: ${{ steps.model.outputs.model }}
           USAGE_EFFORT: ${{ steps.model.outputs.effort }}
-          SIGNATURE: 'Reviewed with: `/cr-request` ${{ steps.skill.outputs.version }} skill'
+          SIGNATURE: 'Reviewed with: `cr-request@v${{ steps.skill.outputs.version }}` skill'
           SEP: ' · '
         run: |
           body=.auto-review/review.md
@@ -1051,7 +1052,11 @@ jobs:
                 .total_cost_usd] | @tsv' "$EXEC_FILE" 2> /dev/null || true)
             if [[ "$usage" =~ ^([0-9]+)[[:space:]]([0-9.eE+-]+)$ ]]; then
               cost=$(LC_ALL=C awk -v c="${BASH_REMATCH[2]}" 'BEGIN { printf "%.4f", c }')
-              DURATION="$DURATION · $USAGE_MODEL $USAGE_EFFORT · ${BASH_REMATCH[1]} tokens · \$$cost"
+              tokens=$(LC_ALL=C awk -v n="${BASH_REMATCH[1]}" 'BEGIN {
+                out=""; while (length(n) > 3) { out="," substr(n,length(n)-2) out; n=substr(n,1,length(n)-3) }
+                print n out
+              }')
+              DURATION="$DURATION · \`$USAGE_MODEL $USAGE_EFFORT\` · $tokens tokens · \$$cost"
               export DURATION
             fi
           fi
@@ -1355,7 +1360,7 @@ jobs:
           tail2=$(tr -d '\r' < "$BODY_FILE" | grep -v '^[[:space:]]*$' | tail -n 2 | sed 's/[[:space:]]*$//' || true)
           prev=$(head -n 1 <<< "$tail2")
           last=$(tail -n 1 <<< "$tail2")
-          signature_re="^Reviewed with: \`/cr-request\` ${VERSION//./\\.} skill · In [0-9]+ min [0-9]+ sec( · [a-z0-9][a-z0-9._:/-]*(\\[[a-z0-9]+\\])? (low|medium|high) · [0-9]+ tokens · \\\$[0-9]+\\.[0-9]{4})?\$"
+          signature_re="^Reviewed with: (\`cr-request@v${VERSION//./\\.}\`|\`/cr-request\` ${VERSION//./\\.}) skill · In [0-9]+ min [0-9]+ sec( · (\`[a-z0-9][a-z0-9._:/-]*(\\[[a-z0-9]+\\])? (low|medium|high)\` · (0|[1-9][0-9]?[0-9]?(,[0-9][0-9][0-9])*)|[a-z0-9][a-z0-9._:/-]*(\\[[a-z0-9]+\\])? (low|medium|high) · [0-9]+) tokens · \\\$[0-9]+\\.[0-9]{4})?\$"
           # CI FooterTest executes this footer grammar against valid and invalid sample bodies.
           next_re="^Next step: (\`/[a-z0-9-]+( [^\`[:space:]]+)*\`( -> \`/[a-z0-9-]+\`( [a-z0-9-]+)?)?( · [^[:space:]].*)?|none( · [^[:space:]].*)?)\$"
           if [[ "$prev" =~ $signature_re ]] && [[ "$last" =~ $next_re ]]; then
@@ -1734,7 +1739,7 @@ jobs:
               marker='<!-- claude-review-ledger:v1 '+encoded(envelope)+' -->'
               # Keep the marker before the existing footer, outside the single details block.
               lines=Path(os.environ['POST_FILE']).read_text(encoding='utf-8').splitlines()
-              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith('Reviewed with: `/cr-request` ')),None)
+              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
               require(idx is not None,'review footer unavailable')
               body='\n'.join(lines[:idx]+[marker]+lines[idx:])+'\n'
               require(len(body.encode())<=65536,'ledger exceeds review body limit')
@@ -1828,7 +1833,7 @@ jobs:
               d['review_source_id']=review_id
               for f in d['findings']: f['origin_review_id']=review_id
               signature=Path(os.environ['POST_FILE']).read_text(encoding='utf-8')
-              m=re.search(r'^Reviewed with: `/cr-request` .* skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',signature,re.M)
+              m=re.search(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` .*) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',signature,re.M)
               duration=int(m[1])*60+int(m[2]) if m else None
               d.update(envelope_version=1,published_review_id=review_id,run_id=run_id,duration_seconds=duration,
                        action_progress=[],disposition_events=events)
@@ -1943,7 +1948,7 @@ jobs:
                   if assessed and 'UNASSESSED' not in assessed.groups() and re.search(r'^\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Rr]eady)$', body, re.M):
                       body,n=re.subn(r'^\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Rr]eady)$', '**Readiness:** Ready', body, flags=re.M)
                       require(n==1, 'readiness line unavailable')
-                      body,n=re.subn(r'^Next step: .*$', 'Next step: `/verify` -> `/finalize` squash', body, flags=re.M)
+                      body,n=re.subn(r'^Next step: .*$', 'Next step: `/verify -> /finalize squash`', body, flags=re.M)
                       require(n==1, 'next step unavailable')
                       post.write_text(body,encoding='utf-8')
                       persist(d)
@@ -2395,7 +2400,7 @@ jobs:
               marker='<!-- claude-review-ledger:v1 '+encoded(envelope)+' -->'
               # Keep the marker before the existing footer, outside the single details block.
               lines=Path(os.environ['POST_FILE']).read_text(encoding='utf-8').splitlines()
-              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith('Reviewed with: `/cr-request` ')),None)
+              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
               require(idx is not None,'review footer unavailable')
               body='\n'.join(lines[:idx]+[marker]+lines[idx:])+'\n'
               require(len(body.encode())<=65536,'ledger exceeds review body limit')
@@ -2489,7 +2494,7 @@ jobs:
               d['review_source_id']=review_id
               for f in d['findings']: f['origin_review_id']=review_id
               signature=Path(os.environ['POST_FILE']).read_text(encoding='utf-8')
-              m=re.search(r'^Reviewed with: `/cr-request` .* skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',signature,re.M)
+              m=re.search(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` .*) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',signature,re.M)
               duration=int(m[1])*60+int(m[2]) if m else None
               d.update(envelope_version=1,published_review_id=review_id,run_id=run_id,duration_seconds=duration,
                        action_progress=[],disposition_events=events)
@@ -2604,7 +2609,7 @@ jobs:
                   if assessed and 'UNASSESSED' not in assessed.groups() and re.search(r'^\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Rr]eady)$', body, re.M):
                       body,n=re.subn(r'^\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Rr]eady)$', '**Readiness:** Ready', body, flags=re.M)
                       require(n==1, 'readiness line unavailable')
-                      body,n=re.subn(r'^Next step: .*$', 'Next step: `/verify` -> `/finalize` squash', body, flags=re.M)
+                      body,n=re.subn(r'^Next step: .*$', 'Next step: `/verify -> /finalize squash`', body, flags=re.M)
                       require(n==1, 'next step unavailable')
                       post.write_text(body,encoding='utf-8')
                       persist(d)

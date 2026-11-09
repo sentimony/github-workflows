@@ -52,10 +52,19 @@ update callers to that exact tag before merging their changes.
 
 This repository's `.github/workflows/auto-reviewer-self.yaml` calls the published
 reusable workflow in `.github/workflows/auto-reviewer.yaml` with the `validate` CI job.
-Each caller requires repository secrets `AUTO_REVIEWER_YNGWALD` and
-`CLAUDE_CODE_OAUTH_TOKEN` for live review runs. Configure separate token values for each
-repository. The published callee retains its `YNGWALD_PR_TOKEN` input; callers map
-that input to `AUTO_REVIEWER_YNGWALD` and bind `CLAUDE_CODE_OAUTH_TOKEN` by its own name.
+Configure Actions secrets in each consumer repository:
+
+1. Create `AUTO_REVIEWER_YNGWALD` and `CLAUDE_CODE_OAUTH_TOKEN`, with separate token
+   values for each repository.
+2. Update the caller to read `secrets.AUTO_REVIEWER_YNGWALD`, as shown below.
+3. Delete the old repository secret `YNGWALD_PR_TOKEN` after all workflows in that
+   repository use the new secret name.
+
+The published `v0.0.1` callee still requires the input key `YNGWALD_PR_TOKEN` on the
+left side of the mapping. Its value on the right reads `secrets.AUTO_REVIEWER_YNGWALD`;
+consumers do not need a repository secret named `YNGWALD_PR_TOKEN`. Renaming the callee
+input requires a new release and an update to the callers' version pins.
+
 CI runs on branch pushes, pull requests, and manual dispatch. Tag pushes do not trigger it.
 
 The [transport contract](AUTO_REVIEWER_TRANSPORT.md) defines the review draft, ledger,

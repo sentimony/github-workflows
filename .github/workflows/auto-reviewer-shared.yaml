@@ -846,10 +846,23 @@ jobs:
           test -n "$version" || { echo "::error::No version in the cr-request SKILL.md"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # The duration in the signature line covers the agent step only, from here to the step after it.
-      - name: Record review start
-        id: start
-        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+      - name: Install latest Claude Code
+        id: claude_cli
+        shell: bash
+        run: |
+          installed=false
+          for attempt in 1 2 3; do
+            if curl -fsSL https://claude.ai/install.sh | bash -s -- latest; then
+              installed=true
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then sleep 5; fi
+          done
+          [ "$installed" = true ] || { echo "::error::Claude Code installation failed after three attempts"; exit 1; }
+          cli="$HOME/.local/bin/claude"
+          [ -x "$cli" ] || { echo "::error::Claude Code executable is missing"; exit 1; }
+          "$cli" --version
+          printf 'path=%s\n' "$cli" >> "$GITHUB_OUTPUT"
 
       # Model and effort come from repository variables; values are checked before they reach claude_args,
       # so a bad variable cannot inject extra CLI flags. The model id may carry a context suffix like [1m].
@@ -895,9 +908,15 @@ jobs:
               output.write('ref=' + ref + '\n')
           PYCODE
 
+      # The duration in the signature line covers the agent step only, from here to the step after it.
+      - name: Record review start
+        id: start
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1
         id: claude
         with:
+          path_to_claude_code_executable: ${{ steps.claude_cli.outputs.path }}
           # Read-only token: the agent reads the PR but cannot write to GitHub.
           github_token: ${{ github.token }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

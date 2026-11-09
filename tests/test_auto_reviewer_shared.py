@@ -56,6 +56,90 @@ class DispatchCompatibilityTest(unittest.TestCase):
         self.assertIn('Provide a PR number using pr"', workflow)
 
 
+class ClaudeInstallerTest(unittest.TestCase):
+    def setUp(self):
+        from scripts.check_auto_reviewer_shared_contract import load
+        steps=load(str(WORKFLOW))['jobs']['review']['steps']
+        self.assertTrue(any(s.get('name')=='Install latest Claude Code' for s in steps),
+                        'The review runner must explicitly install the latest Claude Code')
+
+    def install(self, failures=0, stale=False, missing=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); binary=root/'bin'; binary.mkdir()
+            home=root/'home'; home.mkdir()
+            cli=home/'.local/bin/claude'; cli.parent.mkdir(parents=True)
+            if stale:
+                cli.write_text('#!/bin/bash\necho stale\n'); cli.chmod(0o755)
+            curl=binary/'curl'
+            curl.write_text('''#!/bin/bash
+n=0
+[ ! -f "$COUNT" ] || n=$(cat "$COUNT")
+n=$((n + 1))
+echo "$n" > "$COUNT"
+[ "$n" -gt "$FAILURES" ] || exit 22
+cat <<'INSTALLER'
+[ "$1" = latest ] || exit 23
+echo "$1" > "$HOME/channel"
+[ "$MISSING" != 1 ] || exit 0
+mkdir -p "$HOME/.local/bin"
+printf '#!/bin/bash\\necho "$1" > "$HOME/version-arg"\\necho test-claude\\n' > "$HOME/.local/bin/claude"
+chmod +x "$HOME/.local/bin/claude"
+INSTALLER
+''')
+            curl.chmod(0o755)
+            sleep=binary/'sleep'; sleep.write_text('#!/bin/bash\necho "$1" >> "$HOME/sleeps"\n'); sleep.chmod(0o755)
+            env={**os.environ,'HOME':str(home),'PATH':str(binary)+os.pathsep+os.environ['PATH'],
+                 'COUNT':str(root/'count'),'FAILURES':str(failures),'MISSING':str(int(missing)),
+                 'GITHUB_OUTPUT':str(root/'output')}
+            result=subprocess.run(['bash','-eo','pipefail','-c',step('Install latest Claude Code')],env=env,capture_output=True,text=True)
+            read=lambda p: p.read_text() if p.exists() else ''
+            return result,read(root/'output'),read(home/'channel'),read(home/'version-arg'),read(root/'count'),read(home/'sleeps'),str(cli)
+
+    def test_latest_installer_and_executable_output(self):
+        result,output,channel,version,count,sleeps,cli=self.install()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(channel,'latest\n')
+        self.assertEqual(version,'--version\n')
+        self.assertEqual(output,'path='+cli+'\n')
+        self.assertEqual(count,'1\n')
+        self.assertEqual(sleeps,'')
+
+    def test_curl_failure_retries_with_pipefail(self):
+        result,output,channel,version,count,sleeps,cli=self.install(failures=2)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(output,'path='+cli+'\n')
+        self.assertEqual(count,'3\n')
+        self.assertEqual(sleeps,'5\n5\n')
+
+    def test_three_failed_attempts_never_use_stale_cli(self):
+        for stale in (False,True):
+            with self.subTest(stale=stale):
+                result,output,channel,version,count,sleeps,cli=self.install(failures=3,stale=stale)
+                self.assertNotEqual(result.returncode,0)
+                self.assertEqual(output,'')
+                self.assertEqual(version,'')
+                self.assertEqual(count,'3\n')
+                self.assertEqual(sleeps,'5\n5\n')
+
+    def test_missing_executable_fails_without_output(self):
+        result,output,*_=self.install(missing=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(output,'')
+
+    def test_action_uses_installed_cli_before_duration_timer(self):
+        from scripts.check_auto_reviewer_shared_contract import load
+        steps=load(str(WORKFLOW))['jobs']['review']['steps']
+        installer=next(s for s in steps if s.get('id')=='claude_cli')
+        agent=next(s for s in steps if s.get('id')=='claude')
+        timer=next(s for s in steps if s.get('id')=='start')
+        self.assertEqual(installer['shell'],'bash')
+        self.assertNotIn('env',installer)
+        self.assertLess(steps.index(installer),steps.index(timer))
+        self.assertEqual(steps.index(timer)+1,steps.index(agent))
+        self.assertEqual(agent['uses'],'anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13')
+        self.assertEqual(agent['with']['path_to_claude_code_executable'],'${{ steps.claude_cli.outputs.path }}')
+
+
 class TransportTest(unittest.TestCase):
     def test_prompt_tool_permissions_and_artifact_paths(self):
         ruby=os.environ.get('RUBY','ruby')
@@ -91,6 +175,7 @@ class ResolverBoundaryTest(unittest.TestCase):
         self.assertIn('resolveReviewThread',encoded)
         self.assertNotIn('resolveReviewThread',step('Publish review actions'))
         self.assertIn('resolve_threads',jobs['complete']['needs'])
+        # Footer/ledger fixtures exercise the same script in both trusted phases.
         self.assertEqual(step('Publish review actions'),step('Complete review actions'))
 
 

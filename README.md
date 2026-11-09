@@ -10,6 +10,13 @@ The reusable workflow posts Claude reviews for eligible pull requests after CI. 
 workflow; `required-ci-job` names the CI job checked by the gate. These are separate
 names.
 
+The runner installs Claude Code from the native `latest` channel on each review run,
+checks that executable with `--version`, and passes its path to the pinned
+`anthropics/claude-code-action`. The CLI version can change between runs; the action SHA
+and the released-tag/SHA skill installer remain unchanged. Installation retries up to
+three times and stops the review if every attempt fails. The review duration starts
+after installation and immediately before inference.
+
 ### Contract
 
 1. `required-ci-job` is a required string. It must match `[A-Za-z_][A-Za-z0-9_-]*`.

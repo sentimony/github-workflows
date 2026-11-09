@@ -16,8 +16,8 @@ names.
 2. `pr` and `pr_number` are optional strings with empty defaults for manual dispatch.
 3. The unreleased source requires secret inputs `AUTO_REVIEWER_YNGWALD` and
    `CLAUDE_CODE_OAUTH_TOKEN`, each bound to the repository secret of the same name.
-   The old `YNGWALD_PR_TOKEN` input is removed from the source contract. The published
-   caller examples below still use the `v0.0.2` contract described under [Callers](#callers).
+   The old `YNGWALD_PR_TOKEN` input is removed from the source contract. The caller
+   examples target the upcoming `v0.0.3` release described under [Callers](#callers).
    Secret names alone do not guarantee nonempty values for fork or bot events. Existing
    eligibility guards remain in place; live startup validation of secret availability
    remains a gap.
@@ -43,7 +43,9 @@ configuration validation still applies.
 
 ### Callers
 
-Callers use the published `v0.0.2` tag. `workflow_run` uses the caller workflow
+Callers target `v0.0.3`. Publish that tag before using these examples; GitHub cannot
+resolve a reusable workflow at a tag that does not yet exist.
+`workflow_run` uses the caller workflow
 definition on its default branch; pull request events use the PR branch copy.
 `workflow_dispatch` becomes available once the workflow exists on the default branch.
 Live equivalence requires runs against the tagged callee.
@@ -53,7 +55,7 @@ patch tag on the merged central commit, push it to origin, confirm it resolves, 
 update callers to that exact tag before merging their changes.
 
 This repository's `.github/workflows/self-auto-reviewer.yaml`, named `Self Auto Reviewer`,
-calls the published `.github/workflows/auto-reviewer.yaml` with the `validate` CI job.
+targets `.github/workflows/auto-reviewer.yaml@v0.0.3` with the `validate` CI job.
 Configure Actions secrets in each consumer repository:
 
 1. Create `AUTO_REVIEWER_YNGWALD` and `CLAUDE_CODE_OAUTH_TOKEN`, with separate token
@@ -62,16 +64,14 @@ Configure Actions secrets in each consumer repository:
 3. Delete the old repository secret `YNGWALD_PR_TOKEN` after all workflows in that
    repository use the new secret name.
 
-The published `v0.0.2` callee still requires the input key `YNGWALD_PR_TOKEN` on the
-left side of the mapping. Its value on the right reads `secrets.AUTO_REVIEWER_YNGWALD`;
-consumers do not need a repository secret named `YNGWALD_PR_TOKEN`.
+For `v0.0.3`, bind the input directly to the repository secret of the same name:
+`AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}`.
 
-The unreleased source removes that legacy input. After the next release is published,
-update the caller's version pin and replace the left-side key with
-`AUTO_REVIEWER_YNGWALD`, yielding
-`AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}`. Updating only the key while
-still calling `v0.0.2` fails workflow validation. Existing `v0.0.1` and `v0.0.2` tags
-retain their original interface.
+When migrating from `v0.0.1` or `v0.0.2`, update both the caller's version pin and the
+left-side input key. Those immutable releases retain `YNGWALD_PR_TOKEN` as their input;
+updating only the key while still calling either release fails workflow validation.
+Consumers using those releases map the legacy input to `secrets.AUTO_REVIEWER_YNGWALD`;
+they do not need a repository secret named `YNGWALD_PR_TOKEN`.
 
 CI runs on branch pushes, pull requests, and manual dispatch. Tag pushes do not trigger it.
 
@@ -106,13 +106,13 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.2
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.3
     with:
       required-ci-job: validate
       pr: ${{ inputs.pr || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
     secrets:
-      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
+      AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
@@ -144,13 +144,13 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.2
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.3
     with:
       required-ci-job: check
       pr: ${{ inputs.pr || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
     secrets:
-      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
+      AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 

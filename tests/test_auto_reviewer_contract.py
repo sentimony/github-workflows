@@ -65,10 +65,15 @@ class ContractTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('unknown caller secret', result.stderr)
 
+    def test_v0_0_2_still_accepts_its_legacy_input(self):
+        legacy = CALLER.replace('      AUTO_REVIEWER_YNGWALD:', '      YNGWALD_PR_TOKEN:')
+        result = self.check(workflow=RELEASED.read_text(), caller=legacy)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_self_caller_matches_callee_contract(self):
         path = ROOT / '.github/workflows/self-auto-reviewer.yaml'
         caller = path.read_text()
-        result = self.check(workflow=RELEASED.read_text(), caller=caller)
+        result = self.check(caller=caller)
         self.assertEqual(result.returncode, 0, result.stderr)
         workflow = load(str(path))
         self.assertEqual(workflow['name'], 'Self Auto Reviewer')
@@ -76,9 +81,9 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(set(workflow['jobs']), {'auto_review'})
         job = workflow['jobs']['auto_review']
         self.assertEqual(job['uses'],
-                         'sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.2')
+                         'sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.3')
         self.assertNotIn('concurrency', job)
-        self.assertEqual(job['secrets']['YNGWALD_PR_TOKEN'],
+        self.assertEqual(job['secrets']['AUTO_REVIEWER_YNGWALD'],
                          '${{ secrets.AUTO_REVIEWER_YNGWALD }}')
         self.assertEqual(job['secrets']['CLAUDE_CODE_OAUTH_TOKEN'],
                          '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}')
@@ -162,7 +167,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(len(examples), 2)
         for example, expected in zip(examples, ('validate', 'check')):
             with self.subTest(expected=expected):
-                self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.2\n', example + '\n')
-                self.assertIn('YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', example + '\n')
-                result = self.check(workflow=RELEASED.read_text(), caller=example, expected=expected)
+                self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.3\n', example + '\n')
+                self.assertIn('AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', example + '\n')
+                result = self.check(caller=example, expected=expected)
                 self.assertEqual(result.returncode, 0, result.stderr)

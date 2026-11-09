@@ -9,7 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTER = {
     'reviewer': 'yngwald',
-    'secret': 'YNGWALD_PR_TOKEN',
+    'secret': 'AUTO_REVIEWER_YNGWALD',
     'workflow': '.github/workflows/auto-reviewer.yaml',
     'name': 'Auto Reviewer',
     'dispatch': 'pr',
@@ -1335,7 +1335,7 @@ sys.exit(2)
             self.assertEqual(call['inputs'][name]['type'], 'string')
             self.assertFalse(call['inputs'][name]['required'])
             self.assertEqual(call['inputs'][name]['default'], '')
-        self.assertEqual(set(call['secrets']), {'YNGWALD_PR_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'})
+        self.assertEqual(set(call['secrets']), {'AUTO_REVIEWER_YNGWALD', 'CLAUDE_CODE_OAUTH_TOKEN'})
         self.assertTrue(all(x['required'] for x in call['secrets'].values()))
         gate=next(s for s in workflow['jobs']['gate']['steps'] if s.get('id')=='gate')
         self.assertEqual(gate['env']['REVIEWER'],ADAPTER['reviewer'])

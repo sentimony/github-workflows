@@ -9,6 +9,7 @@ from check_auto_reviewer_contract import load
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / 'scripts/check_auto_reviewer_contract.py'
 WORKFLOW = ROOT / '.github/workflows/auto-reviewer.yaml'
+RELEASED = ROOT / 'scripts/fixtures/auto-reviewer/v0.0.2-contract.json'
 CALLER = '''name: Auto Reviewer
 on: [workflow_dispatch]
 permissions:
@@ -23,7 +24,7 @@ jobs:
     with:
       required-ci-job: validate
     secrets:
-      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
+      AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 '''
 
@@ -39,14 +40,35 @@ class ContractTest(unittest.TestCase):
             env.pop('GEM_PATH', None)
             return subprocess.run(['python3', str(CHECKER), '--workflow', str(central), '--caller', str(adapter), '--required-ci-job', expected], capture_output=True, text=True, env=env)
 
+    def test_released_contract_snapshot_is_immutable(self):
+        import hashlib
+        # Fingerprint captured after comparison with the actual immutable release.
+        self.assertEqual(hashlib.sha256(RELEASED.read_bytes()).hexdigest(),
+                         '8c7962c664d5b8c9909b9e8ea6defc82d513fe93762d7cf1a9eb5025c493aac0')
+
     def test_valid_caller_is_accepted(self):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_source_rejects_legacy_secret_input(self):
+        legacy = CALLER.replace('      AUTO_REVIEWER_YNGWALD:', '      YNGWALD_PR_TOKEN:')
+        both = CALLER.replace('    secrets:', '    secrets:\n      YNGWALD_PR_TOKEN: legacy')
+        for caller in (legacy, both):
+            with self.subTest(caller=caller):
+                result = self.check(caller=caller)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('unknown caller secret', result.stderr)
+        self.assertNotIn('YNGWALD_PR_TOKEN', WORKFLOW.read_text())
+
+    def test_released_contract_rejects_new_input_until_next_release(self):
+        result = self.check(workflow=RELEASED.read_text())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unknown caller secret', result.stderr)
+
     def test_self_caller_matches_callee_contract(self):
         path = ROOT / '.github/workflows/self-auto-reviewer.yaml'
         caller = path.read_text()
-        result = self.check(caller=caller)
+        result = self.check(workflow=RELEASED.read_text(), caller=caller)
         self.assertEqual(result.returncode, 0, result.stderr)
         workflow = load(str(path))
         self.assertEqual(workflow['name'], 'Auto Reviewer')
@@ -54,7 +76,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(set(workflow['jobs']), {'auto_review'})
         job = workflow['jobs']['auto_review']
         self.assertEqual(job['uses'],
-                         'sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.1')
+                         'sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.2')
         self.assertNotIn('concurrency', job)
         self.assertEqual(job['secrets']['YNGWALD_PR_TOKEN'],
                          '${{ secrets.AUTO_REVIEWER_YNGWALD }}')
@@ -70,11 +92,11 @@ class ContractTest(unittest.TestCase):
         original = WORKFLOW.read_text()
         cases = {
             'renamed input': (original.replace('      required-ci-job:', '      renamed-ci-job:', 1), CALLER),
-            'renamed secret': (original.replace('      YNGWALD_PR_TOKEN:', '      RENAMED_TOKEN:', 1), CALLER),
+            'renamed secret': (original.replace('      AUTO_REVIEWER_YNGWALD:', '      RENAMED_TOKEN:', 1), CALLER),
             'missing input': (original, CALLER.replace('      required-ci-job: validate\n', "      pr: ''\n")),
             'wrong type': (original, CALLER.replace('required-ci-job: validate', 'required-ci-job: 123')),
             'unknown input': (original, CALLER.replace('      required-ci-job:', '      typo: value\n      required-ci-job:')),
-            'missing secret': (original, CALLER.replace('      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', '')),
+            'missing secret': (original, CALLER.replace('      AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', '')),
             'unknown secret': (original, CALLER.replace('    secrets:', '    secrets:\n      EXTRA: value')),
             'inherit': (original, CALLER[0:CALLER.index('    secrets:')] + '    secrets: inherit\n'),
             'missing status permission': (original, CALLER.replace('  statuses: write\n', '')),
@@ -140,7 +162,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(len(examples), 2)
         for example, expected in zip(examples, ('validate', 'check')):
             with self.subTest(expected=expected):
-                self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.1\n', example + '\n')
+                self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.2\n', example + '\n')
                 self.assertIn('YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', example + '\n')
-                result = self.check(caller=example, expected=expected)
+                result = self.check(workflow=RELEASED.read_text(), caller=example, expected=expected)
                 self.assertEqual(result.returncode, 0, result.stderr)

@@ -25,7 +25,7 @@ on:
         type: string
         default: ''
     secrets:
-      YNGWALD_PR_TOKEN:
+      AUTO_REVIEWER_YNGWALD:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -389,7 +389,7 @@ jobs:
         name: Publish merged review summary
         if: always()
         env:
-          GH_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
         run: |
           python3 -I - <<'PYCODE'
           import json, os, subprocess, sys
@@ -1461,11 +1461,11 @@ jobs:
       - id: post
         if: steps.validate.outputs.ready_to_post == 'true'
         env:
-          GH_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
         run: |
-          test -n "$GH_TOKEN" || { echo "::error::YNGWALD_PR_TOKEN is not set"; exit 1; }
+          test -n "$GH_TOKEN" || { echo "::error::AUTO_REVIEWER_YNGWALD is not set"; exit 1; }
           login="$(gh api user --jq .login)"
-          test "$login" = "$REVIEWER" || { echo "::error::YNGWALD_PR_TOKEN belongs to '$login', not $REVIEWER"; exit 1; }
+          test "$login" = "$REVIEWER" || { echo "::error::AUTO_REVIEWER_YNGWALD belongs to '$login', not $REVIEWER"; exit 1; }
           head=$(gh api "repos/$REPO/pulls/$NUMBER" --jq .head.sha)
           [ "$head" = "$HEAD_SHA" ] || { echo "::error::PR head changed before review POST"; exit 1; }
           payload="$(mktemp)"
@@ -1488,7 +1488,7 @@ jobs:
         id: ledger
         if: steps.post.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
           REVIEW_ID: ${{ steps.post.outputs.review_id }}
           PHASE: PREPARE
         run: |
@@ -2149,7 +2149,7 @@ jobs:
         id: ledger
         if: always() && needs.publish.outputs.review_id != ''
         env:
-          GH_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
           REVIEW_ID: ${{ needs.publish.outputs.review_id }}
           PHASE: COMPLETE
         run: |

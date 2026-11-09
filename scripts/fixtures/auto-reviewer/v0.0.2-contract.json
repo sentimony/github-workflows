@@ -1,0 +1,87 @@
+{
+  "_source": {
+    "ref": "v0.0.2",
+    "commit": "54e145d9ccc26161c627fa31f71f10f766287f87",
+    "workflow_blob": "fe793825b254a533a3c3d5da873a785b8a8de649"
+  },
+  "on": {
+    "workflow_call": {
+      "inputs": {
+        "required-ci-job": {
+          "description": "Required CI job name",
+          "required": true,
+          "type": "string"
+        },
+        "pr": {
+          "description": "PR number",
+          "required": false,
+          "type": "string",
+          "default": ""
+        },
+        "pr_number": {
+          "description": "Legacy PR number",
+          "required": false,
+          "type": "string",
+          "default": ""
+        }
+      },
+      "secrets": {
+        "YNGWALD_PR_TOKEN": {
+          "required": true
+        },
+        "CLAUDE_CODE_OAUTH_TOKEN": {
+          "required": true
+        }
+      }
+    }
+  },
+  "permissions": {},
+  "jobs": {
+    "merged_summary": {
+      "permissions": {
+        "contents": "read",
+        "pull-requests": "read",
+        "issues": "read"
+      }
+    },
+    "gate": {
+      "permissions": {
+        "actions": "read",
+        "contents": "read",
+        "pull-requests": "read",
+        "statuses": "write"
+      }
+    },
+    "review": {
+      "permissions": {
+        "contents": "read",
+        "pull-requests": "read"
+      }
+    },
+    "publish": {
+      "permissions": {
+        "pull-requests": "read",
+        "statuses": "write"
+      }
+    },
+    "resolve_threads": {
+      "permissions": {
+        "contents": "write",
+        "pull-requests": "write"
+      }
+    },
+    "complete": {
+      "permissions": {
+        "pull-requests": "read",
+        "statuses": "write"
+      }
+    },
+    "refresh_merged_summary": {
+      "permissions": {
+        "contents": "read",
+        "pull-requests": "read",
+        "issues": "read"
+      }
+    }
+  }
+}

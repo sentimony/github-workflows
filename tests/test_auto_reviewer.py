@@ -9,7 +9,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTER = {
     'reviewer': 'yngwald',
-    'secret': 'YNGWALD_PR_TOKEN',
+    'secret': 'AUTO_REVIEWER_YNGWALD',
     'workflow': '.github/workflows/auto-reviewer.yaml',
     'name': 'Auto Reviewer',
     'dispatch': 'pr',
@@ -18,6 +18,25 @@ ADAPTER = {
     'skippable_jobs': [],
 }
 WORKFLOW = ROOT / ADAPTER['workflow']
+
+
+def summary_table(body, first_column):
+    lines=body.splitlines()
+    index=next(i for i,line in enumerate(lines) if line.startswith('| '+first_column+' |'))
+    cells=lambda line: [cell.strip().strip('*') for cell in line.strip('|').split('|')]
+    headers=cells(lines[index]); rows=[]
+    for line in lines[index+2:]:
+        if not line.startswith('|'): break
+        rows.append(dict(zip(headers,cells(line))))
+    return rows
+
+
+def summary_result(body, name):
+    return summary_table(body,'Critical')[0][name]
+
+
+def summary_usage(body, row, column):
+    return next(item[column] for item in summary_table(body,'Review') if item['Review']==row)
 
 
 def step(name):
@@ -190,16 +209,18 @@ class DraftTest(unittest.TestCase):
         self.assertNotEqual(self.run_draft(lambda d: d['previous_findings'].append(finding)).returncode,0)
 
 class LedgerTest(unittest.TestCase):
-    def run_ledger(self, **override):
+    def run_ledger(self, signature=None, **override):
         run=step('Publish review actions')
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh',root/'gh')
+            os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh',root/'gh')
             actions={'schema_version':1,'repository':'owner/repo','pr_number':42,'head_sha':'a'*40,
                      'review_source_id':None,'findings':[{'origin_review_id':None,'original_id':'R2-F1','path':'a.py','severity':'Minor'}],
                      'previous_findings':[]}
             (root/'actions.json').write_text(json.dumps(actions))
-            (root/'post.md').write_text('<!-- claude-review sha='+('a'*40)+' -->\n\nReviewed with: `cr-request@v0.0.11` skill · In 1 min 3 sec\nNext step: `/verify`\n')
+            if signature is None:
+                signature='Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill · In `1 min 3 sec`'
+            (root/'post.md').write_text('<!-- claude-review sha='+('a'*40)+' -->\n\n'+signature+'\nNext step: `/verify`\n')
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'FIXTURE_DIR':str(root),
                  'REPO':'owner/repo','NUMBER':'42','HEAD_SHA':'a'*40,'REVIEW_ID':'202','GITHUB_RUN_ID':'303',
                  'REVIEWER':'so-upstars','ACTIONS_FILE':str(root/'actions.json'),'POST_FILE':str(root/'post.md'),**override}
@@ -207,6 +228,13 @@ class LedgerTest(unittest.TestCase):
             trace=[json.loads(x) for x in (root/'trace.jsonl').read_text().splitlines()]
             body=(root/'body').read_text() if (root/'body').exists() else ''
             return result,trace,body
+
+    def test_split_skill_only_footer_keeps_ledger_and_duration(self):
+        result,trace,body=self.run_ledger(signature='Reviewed with: `cr-request` `v0.0.11` skill · In `1 min 3 sec`')
+        self.assertEqual(result.returncode,0,result.stderr)
+        marker=body.split('<!-- claude-review-ledger:v1 ',1)[1].split(' -->',1)[0]
+        self.assertEqual(json.loads(marker)['duration_seconds'],63)
+        self.assertIn('Reviewed with: `cr-request` `v0.0.11` skill',body)
 
     def test_canonical_nulls_and_put_readback(self):
         result,trace,body=self.run_ledger()
@@ -266,7 +294,7 @@ class DeferTest(unittest.TestCase):
         run=pipeline_script()
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh_defer',root/'gh')
+            os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh_defer',root/'gh')
             sha='a'*40
             finding={'origin_review_id':101,'original_id':'R1-F1','path':'a.py','severity':'Important'}
             proposal={'schema_version':1,'repository':'owner/repo','pr_number':42,'head_sha':sha,**{k:finding[k] for k in ('origin_review_id','original_id','path')},'disposition':'DEFER','reason':'Can wait','owner':'alice'}
@@ -434,7 +462,7 @@ class ResolverRunTest(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name)
-        os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh_defer',self.root/'gh')
+        os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh_defer',self.root/'gh')
         sha='a'*40
         self.finding={'origin_review_id':101,'original_id':'R1-F1','path':'a.py','severity':'Important'}
         f=self.finding
@@ -473,7 +501,7 @@ class ResolverRunTest(unittest.TestCase):
         (self.root/'post.md').write_text('<!-- claude-review sha='+('a'*40)+' -->\n'
             '| Intent | System | Craft | Critical | Important | Minor |\n'
             '| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | 0 | 0 | 0 |\n'
-            '**Readiness:** Ready with fixes\n\nReviewed with: `cr-request@v0.0.11` skill · In 0 min 2 sec\n'
+            '**Readiness:** Ready with fixes\n\nReviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill · In `0 min 2 sec`\n'
             'Next step: `/cr-received PR #42`\n')
         (self.root/'output').write_text(''); (self.root/'trace.jsonl').write_text('')
 
@@ -682,7 +710,7 @@ class ResolverRunTest(unittest.TestCase):
     def test_actual_status_waits_for_completion_and_readback(self):
         self.prepare()
         extra={'GH_TOKEN':'fixture-status','POST_OUTCOME':'success','LEDGER_OUTCOME':'skipped',
-               'DEFERRED_COMPLETE':'','SIGNATURE':'Reviewed with: `cr-request@v0.0.11` skill','SUMMARY':'pending actions',
+               'DEFERRED_COMPLETE':'','SIGNATURE':'Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill','SUMMARY':'pending actions',
                'STATE':'failure','VALIDATED_AT':'2026-10-30T00:00:00Z','JOB_STATUS':'success',
                'CONTEXT':'Auto Reviewer','RUN_URL':'https://github.com/owner/repo/actions/runs/303',
                'MARKER':'<!-- claude-review sha='+('a'*40)+' -->'}
@@ -809,7 +837,7 @@ class FooterTest(unittest.TestCase):
         start=script.index("tail2=$(tr -d")
         end=script.index('          # The Next step line loses') if '          # The Next step line loses' in script else script.index('# The Next step line loses')
         fragment=script[start:end]
-        signature='Reviewed with: `/cr-request` 0.0.11 skill · In 3 min 12 sec'
+        signature='Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill · In `3 min 12 sec`'
         accepts=['Next step: `/cr-received` · 4 findings to rule on','Next step: none','Next step: none · nothing to rule on','Next step: `/verify docs/plans/x.md` -> `/finalize` squash','Next step: `/verify` -> `/finalize` squash','Next step: `/cr-received PR #16`']
         accepts += ['Next step: `/verify -> /finalize squash`',
                     'Next step: `/verify docs/plans/x.md -> /finalize squash`']
@@ -819,37 +847,65 @@ class FooterTest(unittest.TestCase):
             for nextline in accepts+rejects:
                 with self.subTest(nextline=nextline):
                     path.write_text(signature+'\n'+nextline+'\n')
-                    env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11'}
+                    env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11','WORKFLOW_IDENTITY':'auto-reviewer.yaml@v0.0.3'}
                     result=subprocess.run(['bash','-c','fail() { exit 1; }\n'+fragment],env=env,capture_output=True,text=True)
                     self.assertEqual(result.returncode==0,nextline in accepts,result.stderr)
             for body in [signature+'\r\n'+accepts[0]+'\r\n',signature+'\n\n'+accepts[0]+'\n',accepts[0]+'\n'+signature+'\n']:
                 path.write_bytes(body.encode())
-                result=subprocess.run(['bash','-c','fail() { exit 1; }\n'+fragment],env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11'},capture_output=True,text=True)
+                result=subprocess.run(['bash','-c','fail() { exit 1; }\n'+fragment],env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11','WORKFLOW_IDENTITY':'auto-reviewer.yaml@v0.0.3'},capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
             for body in [signature.replace('skill ·','skill·')+'\n'+accepts[0]+'\n',signature+'\nextra\n'+accepts[0]+'\n']:
                 path.write_text(body)
-                result=subprocess.run(['bash','-c','fail() { exit 1; }\n'+fragment],env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11'},capture_output=True,text=True)
+                result=subprocess.run(['bash','-c','fail() { exit 1; }\n'+fragment],env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11','WORKFLOW_IDENTITY':'auto-reviewer.yaml@v0.0.3'},capture_output=True,text=True)
                 self.assertNotEqual(result.returncode,0)
+
+    def test_workflow_identity_is_validated_against_trusted_job_output(self):
+        script=step('Validate review body')
+        fragment='fail() { exit 1; }\n'+script[script.index('tail2=$(tr -d'):script.index('# The Next step line loses')]
+        identity='auto-reviewer.yaml@v0.0.3'
+        cases=[('v0.0.3',identity,True),('v0.0.1',identity,False),
+               (None,identity,False),(None,'',False),('v0.0.3','',False)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'body'
+            for ref,expected_identity,accepted in cases:
+                with self.subTest(ref=ref,identity=expected_identity):
+                    prefix=f'`auto-reviewer.yaml` `{ref}` workflow · ' if ref is not None else ''
+                    path.write_text('Reviewed with: '+prefix+'`cr-request` `v0.0.16` skill · In `0 min 39 sec`\nNext step: `/verify -> /finalize squash`\n')
+                    env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.16','WORKFLOW_IDENTITY':expected_identity}
+                    result=subprocess.run(['bash','-c',fragment],env=env,capture_output=True,text=True)
+                    self.assertEqual(result.returncode==0,accepted,result.stderr)
+
+    def test_separate_code_spans_match_requested_footer(self):
+        script=step('Validate review body')
+        fragment='fail() { exit 1; }\n'+script[script.index('tail2=$(tr -d'):script.index('# The Next step line loses')]
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'body'
+            path.write_text('Reviewed with: `auto-reviewer.yaml` `1a0e98e59aa772bb4c0b77d2dc4d2f9c6110e04e` workflow · `cr-request` `v0.0.16` skill · In `0 min 55 sec` · `claude-sonnet-5-5` `medium` · `289,723 tokens` · `$0.3138`\nNext step: `/verify -> /finalize squash`\n')
+            env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.16','WORKFLOW_IDENTITY':'auto-reviewer.yaml@1a0e98e59aa772bb4c0b77d2dc4d2f9c6110e04e'}
+            result=subprocess.run(['bash','-c',fragment],env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
 
     def test_signature_accepts_recorded_usage_only_in_its_format(self):
         script=step('Validate review body')
-        start=script.index("tail2=$(tr -d")
-        end=script.index('# The Next step line loses')
-        fragment='fail() { exit 1; }\n'+script[start:end]
-        base='Reviewed with: `/cr-request` 0.0.11 skill · In 3 min 12 sec'
-        accepts=[base,base+' · claude-sonnet-5-5 medium · 12345 tokens · $0.4321',base+' · claude-fable-5-1[1m] high · 1 tokens · $12.0000']
-        modern='Reviewed with: `cr-request@v0.0.11` skill · In 3 min 12 sec'
-        accepts += [modern, modern+' · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452']
-        rejects=[base+' · claude-sonnet-5-5 medium · 12345 tokens · $0.43',base+' · claude-sonnet-5-5 xhigh · 1 tokens · $0.4321',
-                 base+' · claude-sonnet-5-5 medium · 12345 tokens',base+' · $0.4321',
-                 modern+' · `claude-sonnet-5-5 medium` · 13,24 tokens · $0.1452',
-                 modern+' · `claude-sonnet-5-5 medium · 132,478 tokens · $0.1452']
+        fragment='fail() { exit 1; }\n'+script[script.index('tail2=$(tr -d'):script.index('# The Next step line loses')]
+        base='Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill · In `3 min 12 sec`'
+        accepts=[base,base+' · `claude-sonnet-5-5` `medium` · `132,478 tokens` · `$0.1452`',
+                 base+' · `claude-fable-5-1[1m]` `high` · `1 tokens` · `$12.0000`',
+                 base+' · `claude-sonnet-5-5` `low` · `0 tokens` · `$0.0000`']
+        rejects=[base+' · `claude-sonnet-5-5` `medium` · `132,478 tokens` · `$0.43`',
+                 base+' · `claude-sonnet-5-5` `xhigh` · `1 tokens` · `$0.1452`',
+                 base+' · `claude-sonnet-5-5` `medium` · `13,24 tokens` · `$0.1452`',
+                 base+' · `claude-sonnet-5-5 medium` · `132,478 tokens` · `$0.1452`',
+                 base+' · `claude-sonnet-5-5` `medium` · 132,478 tokens · `$0.1452`',
+                 base+' · `claude-sonnet-5-5` `medium` · `132,478 tokens` · $0.1452',
+                 base+' · `claude-sonnet-5-5` `medium` · `12345 tokens` · `$0.1452`']
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'body'
             for signature in accepts+rejects:
                 with self.subTest(signature=signature):
                     path.write_text(signature+'\nNext step: `/cr-received PR #16`\n')
-                    result=subprocess.run(['bash','-c',fragment],env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11'},capture_output=True,text=True)
+                    env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11','WORKFLOW_IDENTITY':'auto-reviewer.yaml@v0.0.3'}
+                    result=subprocess.run(['bash','-c',fragment],env=env,capture_output=True,text=True)
                     self.assertEqual(result.returncode==0,signature in accepts,result.stderr)
 
 class ReadinessTest(unittest.TestCase):
@@ -883,11 +939,35 @@ class ReadinessTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(f'review={str(allowed).lower()}', output)
 
+class WorkflowIdentityTest(unittest.TestCase):
+    def test_callee_tag_branch_and_sha_are_resolved_without_a_version_constant(self):
+        for ref,expected in [('refs/tags/v0.0.1','v0.0.1'),('refs/tags/v0.0.3','v0.0.3'),
+                             ('refs/heads/main','main'),('a'*40,'a'*40),('refs/tags/'+'a'*256,'a'*256)]:
+            with self.subTest(ref=ref), tempfile.TemporaryDirectory() as tmp:
+                output=Path(tmp)/'output'
+                env={**os.environ,'WORKFLOW_REF':'sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@'+ref,
+                     'GITHUB_OUTPUT':str(output)}
+                result=subprocess.run(['bash','-eo','pipefail','-c',step('Resolve workflow identity')],env=env,capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertEqual(output.read_text(),'identity=auto-reviewer.yaml@'+expected+'\nref='+expected+'\n')
+
+    def test_missing_or_unsafe_identity_fails_without_inventing_a_version(self):
+        for ref in ['', 'owner/repo/.github/workflows/caller.yaml@refs/tags/v0.0.3',
+                    'owner/repo/.github/workflows/auto-reviewer.yaml@refs/tags/bad`ref',
+                    'owner/repo/.github/workflows/auto-reviewer.yaml@v0.0.3@bad',
+                    'owner/repo/.github/workflows/auto-reviewer.yaml@refs/tags/'+'a'*257]:
+            with self.subTest(ref=ref), tempfile.TemporaryDirectory() as tmp:
+                output=Path(tmp)/'output'
+                env={**os.environ,'WORKFLOW_REF':ref,'GITHUB_OUTPUT':str(output)}
+                result=subprocess.run(['bash','-eo','pipefail','-c',step('Resolve workflow identity')],env=env,capture_output=True,text=True)
+                self.assertNotEqual(result.returncode,0)
+                self.assertFalse(output.exists())
+
 class UsageRecordTest(unittest.TestCase):
-    def run_duration(self, execution, model='claude-sonnet-5-5', effort='medium', raw=None, version='0.0.11', elapsed=125):
+    def run_duration(self, execution, model='claude-sonnet-5-5', effort='medium', raw=None, version='0.0.11', elapsed=125, workflow_ref='v0.0.3'):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'.auto-review').mkdir()
-            sig=f'Reviewed with: `cr-request@v{version}` skill'
+            sig=f'Reviewed with: `auto-reviewer.yaml` `{workflow_ref}` workflow · `cr-request` `v{version}` skill'
             (root/'.auto-review/review.md').write_text('<!-- m -->\nbody\n\n'+sig+'\nNext step: `/cr-received PR #1`\n')
             env={**os.environ,'START':'0','SIGNATURE':sig,'SEP':' · ','USAGE_MODEL':model,'USAGE_EFFORT':effort}
             if execution is not None:
@@ -900,18 +980,19 @@ class UsageRecordTest(unittest.TestCase):
     def test_usage_is_appended_to_the_signature(self):
         result={'type':'result','total_cost_usd':0.43215,'usage':{'input_tokens':100,'output_tokens':20,'cache_creation_input_tokens':3,'cache_read_input_tokens':900},'modelUsage':{}}
         line=self.run_duration([{'type':'system'},result])
-        self.assertEqual(line,'Reviewed with: `cr-request@v0.0.11` skill · In 2 min 5 sec · `claude-sonnet-5-5 medium` · 1,023 tokens · $0.4321')
+        self.assertEqual(line,'Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill · In `2 min 5 sec` · `claude-sonnet-5-5` `medium` · `1,023 tokens` · `$0.4321`')
 
     def test_exact_requested_footer_example(self):
-        usage={'type':'result','total_cost_usd':0.1452,'usage':{'input_tokens':132478}}
-        line=self.run_duration([usage], version='0.0.16', elapsed=39)
-        self.assertEqual(line,'Reviewed with: `cr-request@v0.0.16` skill · In 0 min 39 sec · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452')
+        usage={'type':'result','total_cost_usd':0.3138,'usage':{'input_tokens':289723}}
+        line=self.run_duration([usage], version='0.0.16', elapsed=55,
+                               workflow_ref='1a0e98e59aa772bb4c0b77d2dc4d2f9c6110e04e')
+        self.assertEqual(line,'Reviewed with: `auto-reviewer.yaml` `1a0e98e59aa772bb4c0b77d2dc4d2f9c6110e04e` workflow · `cr-request` `v0.0.16` skill · In `0 min 55 sec` · `claude-sonnet-5-5` `medium` · `289,723 tokens` · `$0.3138`')
         workflow=WORKFLOW.read_text()
-        self.assertEqual(workflow.count('Reviewed with: `cr-request@v${{ steps.skill.outputs.version }}` skill'),2)
+        self.assertEqual(workflow.count('Reviewed with: `auto-reviewer.yaml` `${{ steps.workflow_identity.outputs.ref }}` workflow · `cr-request` `v${{ steps.skill.outputs.version }}` skill'),2)
         self.assertIn('Next step: `/verify -> /finalize squash`',workflow)
 
     def test_missing_or_unreadable_usage_leaves_duration_only(self):
-        duration='Reviewed with: `cr-request@v0.0.11` skill · In 2 min 5 sec'
+        duration='Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill · In `2 min 5 sec`'
         self.assertEqual(self.run_duration(None),duration)
         self.assertEqual(self.run_duration([],raw='not json'),duration)
         self.assertEqual(self.run_duration([{'type':'system'}]),duration)
@@ -1004,7 +1085,7 @@ class SummaryRefreshTest(unittest.TestCase):
         jobs=self.workflow()['jobs']; self.assertIn('refresh_merged_summary',jobs)
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh_summary',root/'gh')
+            os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh_summary',root/'gh')
             state={'merged':True,'reviews':[],'comments':[],'threads':[]}
             (root/'state.json').write_text(json.dumps(state))
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],
@@ -1020,14 +1101,14 @@ class SummaryRefreshTest(unittest.TestCase):
             invoke('refresh_merged_summary'); invoke('merged_summary')
             state=json.loads((root/'state.json').read_text())
             self.assertEqual(len(state['comments']),1)
-            self.assertIn('| Reviews | 1 |',state['comments'][0]['body'])
+            self.assertEqual(sum(row['Review'].isdigit() for row in summary_table(state['comments'][0]['body'],'Review')),1)
 
     def test_unmerged_completion_skips_summary_publication(self):
         job=self.workflow()['jobs']['refresh_merged_summary']
         self.assertEqual(job['env']['SUMMARY_REFRESH'],'true')
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh_summary',root/'gh')
+            os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh_summary',root/'gh')
             (root/'state.json').write_text(json.dumps({'merged':False,'reviews':[],'comments':[]}))
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],
                  'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42',
@@ -1335,7 +1416,7 @@ sys.exit(2)
             self.assertEqual(call['inputs'][name]['type'], 'string')
             self.assertFalse(call['inputs'][name]['required'])
             self.assertEqual(call['inputs'][name]['default'], '')
-        self.assertEqual(set(call['secrets']), {'YNGWALD_PR_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'})
+        self.assertEqual(set(call['secrets']), {'AUTO_REVIEWER_YNGWALD', 'CLAUDE_CODE_OAUTH_TOKEN'})
         self.assertTrue(all(x['required'] for x in call['secrets'].values()))
         gate=next(s for s in workflow['jobs']['gate']['steps'] if s.get('id')=='gate')
         self.assertEqual(gate['env']['REVIEWER'],ADAPTER['reviewer'])
@@ -1389,7 +1470,7 @@ class SummaryRunTest(unittest.TestCase):
     def run_summary(self, state, repeat=False):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh_summary',root/'gh')
+            os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh_summary',root/'gh')
             (root/'state.json').write_text(json.dumps(state))
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'], 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42'}
             def invoke(name):
@@ -1413,6 +1494,49 @@ class SummaryRunTest(unittest.TestCase):
     def with_signature(review, line):
         return {**review,'body':review['body']+'\n\n'+line+'\nNext step: none'}
 
+    def test_approved_summary_layout_and_grouped_tokens(self):
+        prefix='Reviewed with: `cr-request@v0.0.16` skill · In '
+        first=self.with_signature(self.review(101,39),prefix+'0 min 39 sec · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452')
+        second=self.with_signature(self.review(102,51),prefix+'0 min 51 sec · `claude-sonnet-5-5 medium` · 212,265 tokens · $0.2264')
+        state,_=self.run_summary({'reviews':[first,second]})
+        body=state['comments'][0]['body']
+        self.assertIn('| Critical | Important | Minor | Fixed | Rejected | Deferred | Undetermined |',body)
+        self.assertNotIn('| Reviews |',body)
+        self.assertNotIn('| Findings |',body)
+        self.assertNotIn('| Duration total |',body)
+        self.assertIn('| Review | Model | Effort | Duration | Tokens | Cost |',body)
+        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 39 sec | 132,478 | $0.15 |',body)
+        self.assertIn('| 2 | claude-sonnet-5-5 | medium | 51 sec | 212,265 | $0.23 |',body)
+        self.assertIn('| **Total** | | | **90 sec** | **344,743** | **$0.37** |',body)
+        self.assertIn('| Mean | | | 45.00 sec | | |',body)
+        self.assertIn('| Measured | | | 2/2 | 2/2 | 2/2 |',body)
+
+    def test_approved_summary_keeps_missing_duration_aligned_with_its_review(self):
+        first=self.review(101,None)
+        second=self.with_signature(self.review(102,0),
+            'Reviewed with: `cr-request@v0.0.16` skill · In 0 min 0 sec · `claude-sonnet-5-5 medium` · 0 tokens · $0.0000')
+        state,_=self.run_summary({'reviews':[first,second,self.review(103,7)]})
+        body=state['comments'][0]['body']
+        self.assertIn('| 1 | unknown | unknown | unknown | unknown | unknown |',body)
+        self.assertIn('| 2 | claude-sonnet-5-5 | medium | 0 sec | 0 | $0.00 |',body)
+        self.assertIn('| **Total** | | | **7 sec** | **0** | **$0.00** |',body)
+        self.assertIn('| Mean | | | 3.50 sec | | |',body)
+        self.assertIn('| Measured | | | 2/3 | 1/3 | 1/3 |',body)
+        self.assertIn('| 3 | unknown | unknown | 7 sec | unknown | unknown |',body)
+
+    def test_split_code_footer_and_older_formats_share_summary(self):
+        split='Reviewed with: `auto-reviewer.yaml` `1a0e98e59aa772bb4c0b77d2dc4d2f9c6110e04e` workflow · `cr-request` `v0.0.16` skill · In `0 min 55 sec` · `claude-sonnet-5-5` `medium` · `289,723 tokens` · `$0.3138`'
+        combined='Reviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `cr-request@v0.0.16` skill · In 0 min 39 sec · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452'
+        legacy='Reviewed with: `/cr-request` 0.0.11 skill · In 0 min 20 sec · claude-sonnet-5-5 medium · 1000 tokens · $0.2500'
+        reviews=[self.with_signature({'id':n,'user':{'login':'so-upstars'},'body':''},line)
+                 for n,line in enumerate((split,combined,legacy),101)]
+        state,_=self.run_summary({'reviews':reviews})
+        body=state['comments'][0]['body']
+        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 55 sec | 289,723 | $0.31 |',body)
+        self.assertIn('| **Total** | | | **114 sec** | **423,201** | **$0.71** |',body)
+        self.assertIn('| Mean | | | 38.00 sec | | |',body)
+        self.assertIn('| Measured | | | 3/3 | 3/3 | 3/3 |',body)
+
     def test_summary_is_a_table_with_per_review_usage(self):
         base='Reviewed with: `/cr-request` 0.0.11 skill · In 0 min 20 sec'
         first=self.with_signature(self.review(101),base+' · claude-sonnet-5-5 medium · 1000 tokens · $0.2500')
@@ -1420,31 +1544,32 @@ class SummaryRunTest(unittest.TestCase):
         old=self.with_signature(self.review(103),base)
         state,_=self.run_summary({'reviews':[first,second,old]})
         body=state['comments'][0]['body']
-        self.assertIn('| Metric | Value |\n| --- | --- |\n| Reviews | 3 |\n| Findings | 3 + unknown |',body)
-        for row in ('| Critical | 0 + unknown |','| Important | 3 + unknown |','| Minor | 0 + unknown |','| Duration measured | 3/3 |','| Duration mean | 20.00 sec |'):
-            self.assertIn(row,body)
-        self.assertIn('| Review | Model | Effort | Tokens | Cost |\n| --- | --- | --- | --- | --- |',body)
-        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 1000 | $0.25 |',body)
-        self.assertIn('| 2 | claude-opus-5-5 | high | 2500 | $1.00 |',body)
-        self.assertIn('| 3 | unknown | unknown | unknown | unknown |',body)
-        self.assertIn('| Total (measured 2/3) | | | 3500 | $1.25 |',body)
+        self.assertEqual(summary_result(body,'Critical'),'0 + unknown')
+        self.assertEqual(summary_result(body,'Important'),'3 + unknown')
+        self.assertEqual(summary_result(body,'Minor'),'0 + unknown')
+        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 20 sec | 1,000 | $0.25 |',body)
+        self.assertIn('| 2 | claude-opus-5-5 | high | 20 sec | 2,500 | $1.00 |',body)
+        self.assertIn('| 3 | unknown | unknown | 20 sec | unknown | unknown |',body)
+        self.assertIn('| **Total** | | | **60 sec** | **3,500** | **$1.25** |',body)
+        self.assertIn('| Mean | | | 20.00 sec | | |',body)
+        self.assertIn('| Measured | | | 3/3 | 2/3 | 2/3 |',body)
 
     def test_summary_reads_new_footer_and_legacy_usage_together(self):
-        modern='Reviewed with: `cr-request@v0.0.16` skill · In 0 min 39 sec · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452'
+        modern='Reviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `cr-request@v0.0.16` skill · In 0 min 39 sec · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452'
         legacy='Reviewed with: `/cr-request` 0.0.11 skill · In 0 min 20 sec · claude-sonnet-5-5 medium · 1000 tokens · $0.2500'
         first=self.with_signature({'id':101,'user':{'login':'so-upstars'},'body':''}, modern)
         second=self.with_signature(self.review(102), legacy)
         state,_=self.run_summary({'reviews':[first,second]})
         body=state['comments'][0]['body']
-        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 132478 | $0.15 |',body)
-        self.assertIn('| Total (measured 2/2) | | | 133478 | $0.40 |',body)
-        self.assertIn('| Duration total | 59 sec |',body)
+        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 39 sec | 132,478 | $0.15 |',body)
+        self.assertIn('| **Total** | | | **59 sec** | **133,478** | **$0.40** |',body)
+        self.assertEqual(summary_usage(body,'Total','Duration'),'59 sec')
 
     def test_summary_without_recorded_usage_is_unknown(self):
         state,_=self.run_summary({'reviews':[self.review()]})
         body=state['comments'][0]['body']
-        self.assertIn('| 1 | unknown | unknown | unknown | unknown |',body)
-        self.assertIn('| Total (measured 0/1) | | | unknown | unknown |',body)
+        self.assertIn('| 1 | unknown | unknown | 20 sec | unknown | unknown |',body)
+        self.assertIn('| **Total** | | | **20 sec** | **unknown** | **unknown** |',body)
 
     def test_no_reviews_and_legacy_duration(self):
         state,trace=self.run_summary({'reviews':[]})
@@ -1453,8 +1578,9 @@ class SummaryRunTest(unittest.TestCase):
         state,trace=self.run_summary({'reviews':[review]},repeat=True)
         self.assertEqual(len(state['comments']),1)
         body=state['comments'][0]['body']
-        self.assertIn('| Findings | 0 + unknown |',body)
-        self.assertIn('| Duration total | 63 sec |',body)
+        for severity in ('Critical','Important','Minor'):
+            self.assertEqual(summary_result(body,severity),'0 + unknown')
+        self.assertEqual(summary_usage(body,'Total','Duration'),'63 sec')
         self.assertEqual(sum(x['method']=='POST' and '/issues/42/comments' in x['endpoint'] for x in trace),1)
 
     def test_forged_marker_and_last_host_reply(self):
@@ -1465,14 +1591,14 @@ class SummaryRunTest(unittest.TestCase):
         fake={'id':88,'user':{'login':'mallory'},'body':'<!-- claude-review summary -->'}
         state,_=self.run_summary({'reviews':[review], 'threads':[thread], 'comments':[fake]},repeat=True)
         self.assertEqual(len(state['comments']),2)
-        self.assertIn('| Rejected | 1 |',state['comments'][1]['body'])
-        self.assertIn('| Duration mean | 20.00 sec |',state['comments'][1]['body'])
+        self.assertEqual(summary_result(state['comments'][1]['body'],'Rejected'),'1')
+        self.assertEqual(summary_usage(state['comments'][1]['body'],'Mean','Duration'),'20.00 sec')
 
     def test_paginated_reviews_and_unknown_duration(self):
         reviews=[{'id':n,'user':{'login':'so-upstars'},'body':'legacy'} for n in range(1,102)]
         state,trace=self.run_summary({'reviews':reviews})
-        self.assertIn('| Reviews | 101 |',state['comments'][0]['body'])
-        self.assertIn('| Duration total | unknown |',state['comments'][0]['body'])
+        self.assertEqual(sum(row['Review'].isdigit() for row in summary_table(state['comments'][0]['body'],'Review')),101)
+        self.assertEqual(summary_usage(state['comments'][0]['body'],'Total','Duration'),'unknown')
         self.assertTrue(any('page=2' in x['endpoint'] for x in trace))
 
     def test_malformed_ledger_is_unknown_not_zero(self):
@@ -1480,9 +1606,10 @@ class SummaryRunTest(unittest.TestCase):
         review['body']=review['body'].replace('"envelope_version": 1','"envelope_version": true')
         state,_=self.run_summary({'reviews':[review]})
         body=state['comments'][0]['body']
-        self.assertIn('| Findings | 0 + unknown |',body)
-        self.assertIn('| Rejected | 0 + unknown |',body)
-        self.assertIn('| Duration measured | 0/1 |',body)
+        for severity in ('Critical','Important','Minor'):
+            self.assertEqual(summary_result(body,severity),'0 + unknown')
+        self.assertEqual(summary_result(body,'Rejected'),'0 + unknown')
+        self.assertEqual(summary_usage(body,'Measured','Duration'),'0/1')
 
     def test_later_explicit_disposition_wins(self):
         review=self.review()
@@ -1491,7 +1618,7 @@ class SummaryRunTest(unittest.TestCase):
         def c(i,body,stamp,author='alice',review=None): return {'databaseId':i,'author':{'login':author},'authorAssociation':'MEMBER','body':body,'updatedAt':stamp,'pullRequestReview':review}
         thread={'id':'t','path':'a.py','isResolved':False,'comments':[c(1,'**Important** R1-F1 - finding','2026-10-30T00:00:00Z','so-upstars',{'databaseId':101}),c(2,marker('REJECT'),'2026-10-30T00:00:01Z'),c(3,marker('ACCEPT'),'2026-10-30T00:00:02Z')]}
         state,_=self.run_summary({'reviews':[review],'threads':[thread]})
-        self.assertIn('| Rejected | 0 |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'0')
 
     def test_declined_defer_does_not_erase_reject_or_duplicate_finding(self):
         origin=self.review()
@@ -1505,12 +1632,12 @@ class SummaryRunTest(unittest.TestCase):
         thread={'id':'t','path':'a.py','isResolved':False,'comments':[c(1,'so-upstars','**Important** R1-F1 - finding',{'databaseId':101}),c(2,'alice','<!-- cr-received-disposition:v1 '+json.dumps(marker)+' -->',None)]}
         state,_=self.run_summary({'reviews':[origin,carry],'threads':[thread]})
         body=state['comments'][0]['body']
-        self.assertIn('| Findings | 1 |\n',body)
-        self.assertIn('| Important | 1 |\n',body)
-        self.assertIn('| Undetermined | 0 |\n',body)
-        self.assertIn('| Rejected | 1 |\n',body)
-        self.assertIn('| Duration total | 60 sec |',body)
-        self.assertIn('| Duration mean | 30.00 sec |',body)
+        self.assertEqual(sum(int(summary_result(body,k).split()[0]) for k in ('Critical','Important','Minor')),1)
+        self.assertEqual(summary_result(body,'Important'),'1')
+        self.assertEqual(summary_result(body,'Undetermined'),'0')
+        self.assertEqual(summary_result(body,'Rejected'),'1')
+        self.assertEqual(summary_usage(body,'Total','Duration'),'60 sec')
+        self.assertEqual(summary_usage(body,'Mean','Duration'),'30.00 sec')
 
     def defer_fixture(self):
         origin=self.review()
@@ -1534,10 +1661,10 @@ class SummaryRunTest(unittest.TestCase):
         data=self.defer_fixture()
         thread=data['threads'][0]
         state,_=self.run_summary(data)
-        self.assertIn('| Deferred | 1 |\n',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'1')
         thread['isResolved']=False
         state,_=self.run_summary(data)
-        self.assertIn('| Deferred | 0 + unknown |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'0 + unknown')
 
     def test_acceptance_reason_can_differ_from_proposal(self):
         data=self.defer_fixture()
@@ -1547,13 +1674,13 @@ class SummaryRunTest(unittest.TestCase):
         carry['body']='<!-- claude-review-ledger:v1 '+json.dumps(d)+' -->'
         data['issue']['body']=data['issue']['body'].replace('alice Later','alice Reviewer confirms later work')
         state,_=self.run_summary(data)
-        self.assertIn('| Deferred | 1 |\n',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'1')
 
     def test_closed_deferred_issue_is_incomplete(self):
         data=self.defer_fixture()
         data['issue']['state']='closed'
         state,_=self.run_summary(data)
-        self.assertIn('| Deferred | 0 + unknown |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'0 + unknown')
 
     def test_latest_defer_decision_controls_completion(self):
         for decision in ('DECLINED','NONE'):
@@ -1568,8 +1695,8 @@ class SummaryRunTest(unittest.TestCase):
                     data['reviews'].append(later)
                     if reverse: data['reviews'].reverse()
                     state,_=self.run_summary(data)
-                    self.assertIn('| Deferred | 0 + unknown |',state['comments'][0]['body'])
-                    self.assertIn('| Rejected | 0 + unknown |',state['comments'][0]['body'])
+                    self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'0 + unknown')
+                    self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'0 + unknown')
 
     def test_new_host_defer_requires_fresh_matching_acceptance(self):
         for change in ('head','reason'):
@@ -1580,7 +1707,7 @@ class SummaryRunTest(unittest.TestCase):
             marker.update(updatedAt='2026-10-30T00:00:04Z',body='<!-- cr-received-disposition:v1 '+json.dumps(payload)+' -->')
             data['head_sha']='c'*40
             state,_=self.run_summary(data)
-            self.assertIn('| Deferred | 0 + unknown |',state['comments'][0]['body'])
+            self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'0 + unknown')
 
     def test_same_timestamp_defer_edits_require_matching_source_evidence(self):
         for change in ('reason','comment_id','author'):
@@ -1593,7 +1720,7 @@ class SummaryRunTest(unittest.TestCase):
                 elif change=='comment_id': marker['databaseId']=4
                 else: marker['author']={'login':'bob'}
                 state,_=self.run_summary(data)
-                self.assertIn('| Deferred | 0 + unknown |',state['comments'][0]['body'])
+                self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'0 + unknown')
 
     def test_thread_and_reply_pagination(self):
         review=self.review()
@@ -1603,12 +1730,12 @@ class SummaryRunTest(unittest.TestCase):
         threads=[{'id':'other'+str(i),'path':'other','isResolved':False,'comments':[]} for i in range(100)]
         threads.append({'id':'target','path':'a.py','isResolved':False,'comments':comments})
         state,trace=self.run_summary({'reviews':[review],'threads':threads})
-        self.assertIn('| Rejected | 1 |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'1')
         self.assertGreaterEqual(sum(x['endpoint']=='graphql' for x in trace),3)
 
     def test_unmerged_rejected_before_write_and_existing_comment_updated(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh_summary',root/'gh')
+            root=Path(tmp); os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh_summary',root/'gh')
             (root/'state.json').write_text(json.dumps({'merged':False,'reviews':[self.review()]}))
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42'}
             result=subprocess.run(['bash','-eo','pipefail','-c',step('Gather merged review summary')],cwd=root,env=env,capture_output=True,text=True)
@@ -1619,7 +1746,7 @@ class SummaryRunTest(unittest.TestCase):
         existing={'id':7,'user':{'login':'so-upstars'},'body':'<!-- claude-review summary -->\nold'}
         state,trace=self.run_summary({'reviews':[self.review()],'comments':[existing]})
         self.assertEqual(len(state['comments']),1)
-        self.assertIn('| Duration total | 20 sec |',state['comments'][0]['body'])
+        self.assertEqual(summary_usage(state['comments'][0]['body'],'Total','Duration'),'20 sec')
         self.assertEqual(sum(x['method']=='PATCH' for x in trace),1)
 
     def test_untrusted_host_marker_cannot_prove_rejection(self):
@@ -1628,7 +1755,7 @@ class SummaryRunTest(unittest.TestCase):
         def c(i,author,body,association,review=None): return {'databaseId':i,'author':{'login':author},'authorAssociation':association,'body':body,'updatedAt':'2026-10-30T00:00:00Z','pullRequestReview':review}
         thread={'id':'t','path':'a.py','isResolved':False,'comments':[c(1,'so-upstars','**Important** R1-F1 - finding','MEMBER',{'databaseId':101}),c(2,'mallory','<!-- cr-received-disposition:v1 '+json.dumps(marker)+' -->','NONE')]}
         state,_=self.run_summary({'reviews':[review],'threads':[thread]})
-        self.assertIn('| Rejected | 0 + unknown |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'0 + unknown')
 
     def timeline_fixture(self, statuses, disposition=None, marker_head='a'*40):
         origin=self.review()
@@ -1648,23 +1775,22 @@ class SummaryRunTest(unittest.TestCase):
 
     def test_host_accept_then_later_addressed_is_fixed(self):
         state,_=self.run_summary(self.timeline_fixture(['ADDRESSED'],'ACCEPT'))
-        self.assertIn('| Fixed | 1 |\n',state['comments'][0]['body'])
-        self.assertIn('| Undetermined | 0 |\n',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Fixed'),'1')
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Undetermined'),'0')
 
     def test_addressed_without_marker_is_known_fixed(self):
         state,_=self.run_summary(self.timeline_fixture(['ADDRESSED']))
-        self.assertIn('| Fixed | 1 |\n',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Fixed'),'1')
 
     def test_later_not_addressed_resets_fixed_but_not_reject(self):
         state,_=self.run_summary(self.timeline_fixture(['ADDRESSED','NOT_ADDRESSED']))
-        self.assertIn('| Fixed | 0 + unknown |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Fixed'),'0 + unknown')
         state,_=self.run_summary(self.timeline_fixture(['NOT_ADDRESSED'],'REJECT'))
-        self.assertIn('| Rejected | 1 |\n',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'1')
 
     def test_unrelated_head_cannot_supply_reject(self):
         state,_=self.run_summary(self.timeline_fixture(['ADDRESSED'],'REJECT','f'*40))
-        self.assertNotIn('| Rejected | 1 |',state['comments'][0]['body'])
-        self.assertIn('| Rejected | 0 + unknown |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'0 + unknown')
 
     def test_host_disposition_equal_timestamp_uses_comment_id(self):
         fixture=self.timeline_fixture([],'REJECT')
@@ -1673,7 +1799,7 @@ class SummaryRunTest(unittest.TestCase):
         later={**original,'databaseId':3,'body':'<!-- cr-received-disposition:v1 '+json.dumps(marker)+' -->'}
         fixture['threads'][0]['comments']=[fixture['threads'][0]['comments'][0],later,original]
         state,_=self.run_summary(fixture)
-        self.assertIn('| Rejected | 0 |\n',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'0')
 
 
 

@@ -25,7 +25,7 @@ on:
         type: string
         default: ''
     secrets:
-      YNGWALD_PR_TOKEN:
+      AUTO_REVIEWER_YNGWALD:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -268,9 +268,10 @@ jobs:
                   Path('summary.txt').unlink(missing_ok=True)
                   sys.exit(0)
               all_threads=threads()
-              valid=[]; unknown=False; durations=[]; usages=[]
-              usage_re=re.compile(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` [^\n]+) skill · In [0-9]+ min [0-9]+ sec(?: · `?([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)`? · ([0-9]+(?:,[0-9]{3})*) tokens · \$([0-9]+\.[0-9]{4}))?$',re.M)
+              valid=[]; unknown=False; review_durations=[]; usages=[]
+              usage_re=re.compile(r'^Reviewed with: (?:(?:`auto-reviewer\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` [^\n]+) skill · In `?[0-9]+ min [0-9]+ sec`?(?: · `?([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?)`? `?(low|medium|high)`? · `?([0-9]+(?:,[0-9]{3})*) tokens`? · `?\$([0-9]+\.[0-9]{4})`?)?$',re.M)
               for r in reviews:
+                  review_durations.append(None)
                   found_usage=usage_re.findall(r.get('body') or '')
                   found_usage=[(m,e,n.replace(',',''),c) for m,e,n,c in found_usage]
                   usages.append(found_usage[0] if len(found_usage)==1 and found_usage[0][0] else None)
@@ -280,11 +281,12 @@ jobs:
                       d=loads(raw[0])
                       require(valid_envelope(d) and d['repository']==repo and d['pr_number']==number and d['published_review_id']==r.get('id') and d['head_sha']==r.get('commit_id'),'ledger identity')
                       valid.append((r,d))
-                      if d['duration_seconds'] is not None: durations.append(d['duration_seconds'])
+                      review_durations[-1]=d['duration_seconds']
                   except (Stop, ValueError, KeyError, TypeError):
                       unknown=True
-                      signature=re.findall(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` [^\n]+) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',r.get('body') or '',re.M)
-                      if len(signature)==1 and int(signature[0][1])<60: durations.append(int(signature[0][0])*60+int(signature[0][1]))
+                      signature=re.findall(r'^Reviewed with: (?:(?:`auto-reviewer\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` [^\n]+) skill · In `?([0-9]+) min ([0-9]+) sec`?(?: · .*)?$',r.get('body') or '',re.M)
+                      if len(signature)==1 and int(signature[0][1])<60: review_durations[-1]=int(signature[0][0])*60+int(signature[0][1])
+              durations=[d for d in review_durations if d is not None]
               origins={}
               for r,d in valid:
                   for f in d['findings']:
@@ -366,20 +368,30 @@ jobs:
               show=lambda n: str(n) + (' + unknown' if gap else '')
               unk=' + unknown' if history_gap else ''
               count_of=lambda severity: sum(f['severity']==severity for f in origins.values())
-              rows=[('Reviews',str(len(reviews))),('Findings',str(len(origins))+unk)]
-              rows+=[(severity,str(count_of(severity))+unk) for severity in ('Critical','Important','Minor')]
-              rows+=[('Fixed',show(counts['fixed'])),('Rejected',show(counts['REJECT'])),('Deferred',show(counts['deferred'])),
-                  ('Undetermined',show(sum(v not in ('fixed','REJECT','deferred') for v in states.values()))),
-                  ('Duration measured',f'{len(durations)}/{len(reviews)}'),
-                  ('Duration total',str(sum(durations))+' sec' if durations else 'unknown'),
-                  ('Duration mean',f'{sum(durations)/len(durations):.2f} sec' if durations else 'unknown')]
-              lines=['<!-- claude-review summary -->','## Review cycle summary','','| Metric | Value |','| --- | --- |']+[f'| {k} | {v} |' for k,v in rows]
-              # Rows show 2 decimals while the total sums the exact values: an accepted cent drift
+              headers=['Critical','Important','Minor','Fixed','Rejected','Deferred','Undetermined']
+              values=[str(count_of(severity))+unk for severity in headers[:3]]
+              values += [show(counts['fixed']),show(counts['REJECT']),show(counts['deferred']),
+                  show(sum(v not in ('fixed','REJECT','deferred') for v in states.values()))]
+              lines=['<!-- claude-review summary -->','## Review cycle summary','',
+                  '| '+' | '.join(headers)+' |','| '+' | '.join(['---']*len(headers))+' |',
+                  '| '+' | '.join(values)+' |']
+              # Rows show 2 decimals while the total sums the exact values: an accepted cent drift.
               measured=[u for u in usages if u]
-              lines+=['','### Review usage','','| Review | Model | Effort | Tokens | Cost |','| --- | --- | --- | --- | --- |']
-              for n,u in enumerate(usages,1):
-                  lines.append(f'| {n} | {u[0]} | {u[1]} | {u[2]} | ${float(u[3]):.2f} |' if u else f'| {n} | unknown | unknown | unknown | unknown |')
-              lines.append(f'| Total (measured {len(measured)}/{len(usages)}) | | | '+(f'{sum(int(u[2]) for u in measured)} | ${sum(float(u[3]) for u in measured):.2f} |' if measured else 'unknown | unknown |'))
+              lines+=['','### Review usage','',
+                  '| Review | Model | Effort | Duration | Tokens | Cost |',
+                  '| --- | --- | --- | --- | --- | --- |']
+              for n,(u,duration) in enumerate(zip(usages,review_durations),1):
+                  elapsed=str(duration)+' sec' if duration is not None else 'unknown'
+                  usage=[u[0],u[1],elapsed,f'{int(u[2]):,}',f'${float(u[3]):.2f}'] if u else [
+                      'unknown','unknown',elapsed,'unknown','unknown']
+                  lines.append('| '+str(n)+' | '+' | '.join(usage)+' |')
+              total_duration=str(sum(durations))+' sec' if durations else 'unknown'
+              total_tokens=f'{sum(int(u[2]) for u in measured):,}' if measured else 'unknown'
+              total_cost=f'${sum(float(u[3]) for u in measured):.2f}' if measured else 'unknown'
+              lines.append(f'| **Total** | | | **{total_duration}** | **{total_tokens}** | **{total_cost}** |')
+              mean=f'{sum(durations)/len(durations):.2f} sec' if durations else 'unknown'
+              lines.append(f'| Mean | | | {mean} | | |')
+              lines.append(f'| Measured | | | {len(durations)}/{len(reviews)} | {len(measured)}/{len(reviews)} | {len(measured)}/{len(reviews)} |')
               Path('summary.txt').write_text('\n'.join(lines)+'\n',encoding='utf-8')
           except (Stop, ValueError, KeyError, TypeError, OSError):
               print('::error::Merged summary gathering failed', file=sys.stderr)
@@ -389,7 +401,7 @@ jobs:
         name: Publish merged review summary
         if: always()
         env:
-          GH_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
         run: |
           python3 -I - <<'PYCODE'
           import json, os, subprocess, sys
@@ -663,6 +675,7 @@ jobs:
     # The agent can write the body file, so publish takes the version from here, not the artifact.
     outputs:
       version: ${{ steps.skill.outputs.version }}
+      workflow_identity: ${{ steps.workflow_identity.outputs.identity }}
       threads_digest: ${{ steps.threads.outputs.digest }}
     env:
       NUMBER: ${{ needs.gate.outputs.number }}
@@ -865,6 +878,28 @@ jobs:
             echo "effort=$EFFORT"
           } >> "$GITHUB_OUTPUT"
 
+      # job.workflow_ref identifies this reusable workflow, while github.workflow_ref identifies its caller.
+      - name: Resolve workflow identity
+        id: workflow_identity
+        env:
+          # JSON round-trip supports the new job property with older actionlint context schemas.
+          WORKFLOW_REF: ${{ fromJSON(toJSON(job)).workflow_ref }}
+        run: |
+          python3 -I - <<'PYCODE'
+          import os, re, sys
+          source, separator, ref = os.environ['WORKFLOW_REF'].rpartition('@')
+          for prefix in ('refs/tags/', 'refs/heads/'):
+              if ref.startswith(prefix):
+                  ref = ref[len(prefix):]
+                  break
+          if (not separator or source.rsplit('/', 1)[-1] != 'auto-reviewer.yaml'
+                  or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,255}', ref)):
+              sys.exit('Cannot determine a safe reusable workflow identity')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write('identity=auto-reviewer.yaml@' + ref + '\n')
+              output.write('ref=' + ref + '\n')
+          PYCODE
+
       - uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1
         id: claude
         with:
@@ -1009,9 +1044,9 @@ jobs:
               (`Next step: none · <reason>`).
             The publish step cuts the reason after ` · ` and leaves the first two forms whole. The ` · ` and
             ` -> ` in these two lines are the required format, not dashes. Write the signature without
-            a duration; the workflow appends the review duration to it afterwards as ` · In <m> min <s> sec`.
+            a duration; the workflow appends measured duration and usage in code spans afterwards.
             The signature line:
-            Reviewed with: `cr-request@v${{ steps.skill.outputs.version }}` skill
+            Reviewed with: `auto-reviewer.yaml` `${{ steps.workflow_identity.outputs.ref }}` workflow · `cr-request` `v${{ steps.skill.outputs.version }}` skill
           # Reads stay in the workspace and the installed skill, so injected PR text cannot steer the agent
           # to runner files or /proc and copy a token into the body. Grep and Glob are allowed bare: the
           # blockReadsOutsideWorkingDirectories setting, not a path rule, refuses them outside the
@@ -1027,8 +1062,8 @@ jobs:
       # The duration is the agent step's wall time; the agent cannot measure it. Only the signature line
       # among the last two non-blank lines is rewritten, so a quoted signature higher up stays as written;
       # anything the agent put after the signature and a space there is replaced by the measured duration.
-      # Under a minute it reads `In 0 min 42 sec`. Usage comes from the result message in the action's
-      # execution file. Model and effort share one code span, followed by comma-grouped tokens and cost.
+      # Under a minute the duration code span reads 0 min 42 sec. Usage comes from the action's result
+      # execution file. Model, effort, grouped token count and cost each have their own code span.
       # Tokens include input, output, and cache tokens; a missing or unreadable file adds nothing,
       # and the merged summary then shows the usage as unknown.
       - name: Add review duration
@@ -1037,13 +1072,13 @@ jobs:
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
           USAGE_MODEL: ${{ steps.model.outputs.model }}
           USAGE_EFFORT: ${{ steps.model.outputs.effort }}
-          SIGNATURE: 'Reviewed with: `cr-request@v${{ steps.skill.outputs.version }}` skill'
+          SIGNATURE: 'Reviewed with: `auto-reviewer.yaml` `${{ steps.workflow_identity.outputs.ref }}` workflow · `cr-request` `v${{ steps.skill.outputs.version }}` skill'
           SEP: ' · '
         run: |
           body=.auto-review/review.md
           [ -f "$body" ] || exit 0
           elapsed=$(( $(date +%s) - START ))
-          export DURATION="In $(( elapsed / 60 )) min $(( elapsed % 60 )) sec"
+          export DURATION="In \`$(( elapsed / 60 )) min $(( elapsed % 60 )) sec\`"
           if [ -n "${EXEC_FILE:-}" ] && [ -f "$EXEC_FILE" ]; then
             usage=$(jq -r '[.[] | select(type == "object" and .type == "result")] | last
               | select(. != null and (.total_cost_usd | type) == "number" and .total_cost_usd >= 0)
@@ -1056,7 +1091,7 @@ jobs:
                 out=""; while (length(n) > 3) { out="," substr(n,length(n)-2) out; n=substr(n,1,length(n)-3) }
                 print n out
               }')
-              DURATION="$DURATION · \`$USAGE_MODEL $USAGE_EFFORT\` · $tokens tokens · \$$cost"
+              DURATION="$DURATION · \`$USAGE_MODEL\` \`$USAGE_EFFORT\` · \`$tokens tokens\` · \`\$$cost\`"
               export DURATION
             fi
           fi
@@ -1310,6 +1345,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           REVIEW_RESULT: ${{ needs.review.result }}
           VERSION: ${{ needs.review.outputs.version }}
+          WORKFLOW_IDENTITY: ${{ needs.review.outputs.workflow_identity }}
         run: |
           post_status() {
             gh api "repos/$REPO/statuses/$HEAD_SHA" -f state="$1" -f description="$2" \
@@ -1360,7 +1396,11 @@ jobs:
           tail2=$(tr -d '\r' < "$BODY_FILE" | grep -v '^[[:space:]]*$' | tail -n 2 | sed 's/[[:space:]]*$//' || true)
           prev=$(head -n 1 <<< "$tail2")
           last=$(tail -n 1 <<< "$tail2")
-          signature_re="^Reviewed with: (\`cr-request@v${VERSION//./\\.}\`|\`/cr-request\` ${VERSION//./\\.}) skill · In [0-9]+ min [0-9]+ sec( · (\`[a-z0-9][a-z0-9._:/-]*(\\[[a-z0-9]+\\])? (low|medium|high)\` · (0|[1-9][0-9]?[0-9]?(,[0-9][0-9][0-9])*)|[a-z0-9][a-z0-9._:/-]*(\\[[a-z0-9]+\\])? (low|medium|high) · [0-9]+) tokens · \\\$[0-9]+\\.[0-9]{4})?\$"
+          [[ "${WORKFLOW_IDENTITY:-}" =~ ^auto-reviewer\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] \
+            || fail "Missing or invalid reusable workflow identity"
+          workflow_ref="${WORKFLOW_IDENTITY#*@}"
+          workflow_prefix="\`auto-reviewer\\.yaml\` \`${workflow_ref//./\\.}\` workflow · "
+          signature_re="^Reviewed with: ${workflow_prefix}\`cr-request\` \`v${VERSION//./\\.}\` skill · In \`[0-9]+ min [0-9]+ sec\`( · \`[a-z0-9][a-z0-9._:/-]*(\\[[a-z0-9]+\\])?\` \`(low|medium|high)\` · \`(0|[1-9][0-9]?[0-9]?(,[0-9][0-9][0-9])*) tokens\` · \`\\\$[0-9]+\\.[0-9]{4}\`)?\$"
           # CI FooterTest executes this footer grammar against valid and invalid sample bodies.
           next_re="^Next step: (\`/[a-z0-9-]+( [^\`[:space:]]+)*\`( -> \`/[a-z0-9-]+\`( [a-z0-9-]+)?)?( · [^[:space:]].*)?|none( · [^[:space:]].*)?)\$"
           if [[ "$prev" =~ $signature_re ]] && [[ "$last" =~ $next_re ]]; then
@@ -1461,11 +1501,11 @@ jobs:
       - id: post
         if: steps.validate.outputs.ready_to_post == 'true'
         env:
-          GH_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
         run: |
-          test -n "$GH_TOKEN" || { echo "::error::YNGWALD_PR_TOKEN is not set"; exit 1; }
+          test -n "$GH_TOKEN" || { echo "::error::AUTO_REVIEWER_YNGWALD is not set"; exit 1; }
           login="$(gh api user --jq .login)"
-          test "$login" = "$REVIEWER" || { echo "::error::YNGWALD_PR_TOKEN belongs to '$login', not $REVIEWER"; exit 1; }
+          test "$login" = "$REVIEWER" || { echo "::error::AUTO_REVIEWER_YNGWALD belongs to '$login', not $REVIEWER"; exit 1; }
           head=$(gh api "repos/$REPO/pulls/$NUMBER" --jq .head.sha)
           [ "$head" = "$HEAD_SHA" ] || { echo "::error::PR head changed before review POST"; exit 1; }
           payload="$(mktemp)"
@@ -1488,7 +1528,7 @@ jobs:
         id: ledger
         if: steps.post.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
           REVIEW_ID: ${{ steps.post.outputs.review_id }}
           PHASE: PREPARE
         run: |
@@ -1739,7 +1779,7 @@ jobs:
               marker='<!-- claude-review-ledger:v1 '+encoded(envelope)+' -->'
               # Keep the marker before the existing footer, outside the single details block.
               lines=Path(os.environ['POST_FILE']).read_text(encoding='utf-8').splitlines()
-              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
+              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Reviewed with: `auto-reviewer.yaml` ', 'Reviewed with: `auto-reviewer.yaml@', 'Reviewed with: `cr-request` ', 'Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
               require(idx is not None,'review footer unavailable')
               body='\n'.join(lines[:idx]+[marker]+lines[idx:])+'\n'
               require(len(body.encode())<=65536,'ledger exceeds review body limit')
@@ -1833,7 +1873,7 @@ jobs:
               d['review_source_id']=review_id
               for f in d['findings']: f['origin_review_id']=review_id
               signature=Path(os.environ['POST_FILE']).read_text(encoding='utf-8')
-              m=re.search(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` .*) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',signature,re.M)
+              m=re.search(r'^Reviewed with: (?:(?:`auto-reviewer\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` .*) skill · In `?([0-9]+) min ([0-9]+) sec`?(?: · .*)?$',signature,re.M)
               duration=int(m[1])*60+int(m[2]) if m else None
               d.update(envelope_version=1,published_review_id=review_id,run_id=run_id,duration_seconds=duration,
                        action_progress=[],disposition_events=events)
@@ -2149,7 +2189,7 @@ jobs:
         id: ledger
         if: always() && needs.publish.outputs.review_id != ''
         env:
-          GH_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
           REVIEW_ID: ${{ needs.publish.outputs.review_id }}
           PHASE: COMPLETE
         run: |
@@ -2400,7 +2440,7 @@ jobs:
               marker='<!-- claude-review-ledger:v1 '+encoded(envelope)+' -->'
               # Keep the marker before the existing footer, outside the single details block.
               lines=Path(os.environ['POST_FILE']).read_text(encoding='utf-8').splitlines()
-              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
+              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Reviewed with: `auto-reviewer.yaml` ', 'Reviewed with: `auto-reviewer.yaml@', 'Reviewed with: `cr-request` ', 'Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
               require(idx is not None,'review footer unavailable')
               body='\n'.join(lines[:idx]+[marker]+lines[idx:])+'\n'
               require(len(body.encode())<=65536,'ledger exceeds review body limit')
@@ -2494,7 +2534,7 @@ jobs:
               d['review_source_id']=review_id
               for f in d['findings']: f['origin_review_id']=review_id
               signature=Path(os.environ['POST_FILE']).read_text(encoding='utf-8')
-              m=re.search(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` .*) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',signature,re.M)
+              m=re.search(r'^Reviewed with: (?:(?:`auto-reviewer\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` .*) skill · In `?([0-9]+) min ([0-9]+) sec`?(?: · .*)?$',signature,re.M)
               duration=int(m[1])*60+int(m[2]) if m else None
               d.update(envelope_version=1,published_review_id=review_id,run_id=run_id,duration_seconds=duration,
                        action_progress=[],disposition_events=events)

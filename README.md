@@ -14,11 +14,13 @@ names.
 
 1. `required-ci-job` is a required string. It must match `[A-Za-z_][A-Za-z0-9_-]*`.
 2. `pr` and `pr_number` are optional strings with empty defaults for manual dispatch.
-3. Bind both required callee secret inputs explicitly: `YNGWALD_PR_TOKEN` and
-   `CLAUDE_CODE_OAUTH_TOKEN`. The callers below map `YNGWALD_PR_TOKEN` to the repository
-   secret `AUTO_REVIEWER_YNGWALD`. Secret names alone do not guarantee nonempty values for
-   fork or bot events. Existing eligibility guards remain in place; live startup validation
-   of secret availability remains a gap.
+3. The unreleased source requires secret inputs `AUTO_REVIEWER_YNGWALD` and
+   `CLAUDE_CODE_OAUTH_TOKEN`, each bound to the repository secret of the same name.
+   The old `YNGWALD_PR_TOKEN` input is removed from the source contract. The caller
+   examples target the upcoming `v0.0.3` release described under [Callers](#callers).
+   Secret names alone do not guarantee nonempty values for fork or bot events. Existing
+   eligibility guards remain in place; live startup validation of secret availability
+   remains a gap.
 
 The caller must declare an explicit permission ceiling covering the union of permissions
 used by the callee jobs. The caller job must omit `concurrency`, `runs-on`, and `steps`.
@@ -41,7 +43,9 @@ configuration validation still applies.
 
 ### Callers
 
-Callers use the published `v0.0.1` tag. `workflow_run` uses the caller workflow
+Callers target `v0.0.3`. Publish that tag before using these examples; GitHub cannot
+resolve a reusable workflow at a tag that does not yet exist.
+`workflow_run` uses the caller workflow
 definition on its default branch; pull request events use the PR branch copy.
 `workflow_dispatch` becomes available once the workflow exists on the default branch.
 Live equivalence requires runs against the tagged callee.
@@ -50,8 +54,8 @@ Release tags are immutable: never move or recreate one. For later changes, creat
 patch tag on the merged central commit, push it to origin, confirm it resolves, and
 update callers to that exact tag before merging their changes.
 
-This repository's `.github/workflows/self-auto-reviewer.yaml` calls the published
-reusable workflow in `.github/workflows/auto-reviewer.yaml` with the `validate` CI job.
+This repository's `.github/workflows/self-auto-reviewer.yaml`, named `Self Auto Reviewer`,
+targets `.github/workflows/auto-reviewer.yaml@v0.0.3` with the `validate` CI job.
 Configure Actions secrets in each consumer repository:
 
 1. Create `AUTO_REVIEWER_YNGWALD` and `CLAUDE_CODE_OAUTH_TOKEN`, with separate token
@@ -60,10 +64,14 @@ Configure Actions secrets in each consumer repository:
 3. Delete the old repository secret `YNGWALD_PR_TOKEN` after all workflows in that
    repository use the new secret name.
 
-The published `v0.0.1` callee still requires the input key `YNGWALD_PR_TOKEN` on the
-left side of the mapping. Its value on the right reads `secrets.AUTO_REVIEWER_YNGWALD`;
-consumers do not need a repository secret named `YNGWALD_PR_TOKEN`. Renaming the callee
-input requires a new release and an update to the callers' version pins.
+For `v0.0.3`, bind the input directly to the repository secret of the same name:
+`AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}`.
+
+When migrating from `v0.0.1` or `v0.0.2`, update both the caller's version pin and the
+left-side input key. Those immutable releases retain `YNGWALD_PR_TOKEN` as their input;
+updating only the key while still calling either release fails workflow validation.
+Consumers using those releases map the legacy input to `secrets.AUTO_REVIEWER_YNGWALD`;
+they do not need a repository secret named `YNGWALD_PR_TOKEN`.
 
 CI runs on branch pushes, pull requests, and manual dispatch. Tag pushes do not trigger it.
 
@@ -98,13 +106,13 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.1
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.3
     with:
       required-ci-job: validate
       pr: ${{ inputs.pr || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
     secrets:
-      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
+      AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
@@ -136,19 +144,19 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.1
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.3
     with:
       required-ci-job: check
       pr: ${{ inputs.pr || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
     secrets:
-      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
+      AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
 ## Offline checks
 
-Run `python3 -m unittest discover -s scripts -p 'test_*.py'` and
+From the repository root, run `python3 -m unittest discover -s tests -p 'test_*.py'` and
 `actionlint .github/workflows/*.yaml .github/workflows/*.yml`. To validate a caller
 against this checkout, run:
 

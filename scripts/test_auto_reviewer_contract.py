@@ -23,7 +23,7 @@ jobs:
     with:
       required-ci-job: validate
     secrets:
-      YNGWALD_PR_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 '''
 
@@ -57,7 +57,7 @@ class ContractTest(unittest.TestCase):
                          'sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.1')
         self.assertNotIn('concurrency', job)
         self.assertEqual(job['secrets']['YNGWALD_PR_TOKEN'],
-                         '${{ secrets.YNGWALD_PR_AUTO_REVIEW_TOKEN }}')
+                         '${{ secrets.AUTO_REVIEWER_YNGWALD }}')
         self.assertEqual(job['secrets']['CLAUDE_CODE_OAUTH_TOKEN'],
                          '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}')
 
@@ -74,7 +74,7 @@ class ContractTest(unittest.TestCase):
             'missing input': (original, CALLER.replace('      required-ci-job: validate\n', "      pr: ''\n")),
             'wrong type': (original, CALLER.replace('required-ci-job: validate', 'required-ci-job: 123')),
             'unknown input': (original, CALLER.replace('      required-ci-job:', '      typo: value\n      required-ci-job:')),
-            'missing secret': (original, CALLER.replace('      YNGWALD_PR_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}\n', '')),
+            'missing secret': (original, CALLER.replace('      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', '')),
             'unknown secret': (original, CALLER.replace('    secrets:', '    secrets:\n      EXTRA: value')),
             'inherit': (original, CALLER[0:CALLER.index('    secrets:')] + '    secrets: inherit\n'),
             'missing status permission': (original, CALLER.replace('  statuses: write\n', '')),
@@ -141,5 +141,6 @@ class ContractTest(unittest.TestCase):
         for example, expected in zip(examples, ('validate', 'check')):
             with self.subTest(expected=expected):
                 self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.1\n', example + '\n')
+                self.assertIn('YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', example + '\n')
                 result = self.check(caller=example, expected=expected)
                 self.assertEqual(result.returncode, 0, result.stderr)

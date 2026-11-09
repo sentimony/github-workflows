@@ -14,10 +14,11 @@ names.
 
 1. `required-ci-job` is a required string. It must match `[A-Za-z_][A-Za-z0-9_-]*`.
 2. `pr` and `pr_number` are optional strings with empty defaults for manual dispatch.
-3. Bind both required secrets explicitly: `YNGWALD_PR_TOKEN` and
-   `CLAUDE_CODE_OAUTH_TOKEN`. Secret names alone do not guarantee nonempty values for fork
-   or bot events. Existing eligibility guards remain in place; live startup validation of
-   secret availability remains a gap.
+3. Bind both required callee secret inputs explicitly: `YNGWALD_PR_TOKEN` and
+   `CLAUDE_CODE_OAUTH_TOKEN`. The callers below map `YNGWALD_PR_TOKEN` to the repository
+   secret `AUTO_REVIEWER_YNGWALD`. Secret names alone do not guarantee nonempty values for
+   fork or bot events. Existing eligibility guards remain in place; live startup validation
+   of secret availability remains a gap.
 
 The caller must declare an explicit permission ceiling covering the union of permissions
 used by the callee jobs. The caller job must omit `concurrency`, `runs-on`, and `steps`.
@@ -51,9 +52,10 @@ update callers to that exact tag before merging their changes.
 
 This repository's `.github/workflows/auto-reviewer-self.yaml` calls the published
 reusable workflow in `.github/workflows/auto-reviewer.yaml` with the `validate` CI job.
-The self-caller maps the required `YNGWALD_PR_TOKEN` input to the organization secret
-`YNGWALD_PR_AUTO_REVIEW_TOKEN` and binds `CLAUDE_CODE_OAUTH_TOKEN` by its own name. Both
-secrets must be available to this repository for live review runs.
+Each caller requires repository secrets `AUTO_REVIEWER_YNGWALD` and
+`CLAUDE_CODE_OAUTH_TOKEN` for live review runs. Configure separate token values for each
+repository. The published callee retains its `YNGWALD_PR_TOKEN` input; callers map
+that input to `AUTO_REVIEWER_YNGWALD` and bind `CLAUDE_CODE_OAUTH_TOKEN` by its own name.
 CI runs on branch pushes, pull requests, and manual dispatch. Tag pushes do not trigger it.
 
 The [transport contract](AUTO_REVIEWER_TRANSPORT.md) defines the review draft, ledger,
@@ -93,7 +95,7 @@ jobs:
       pr: ${{ inputs.pr || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
     secrets:
-      YNGWALD_PR_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
@@ -131,7 +133,7 @@ jobs:
       pr: ${{ inputs.pr || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
     secrets:
-      YNGWALD_PR_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 

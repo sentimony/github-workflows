@@ -115,5 +115,6 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(len(examples), 2)
         for example, expected in zip(examples, ('validate', 'check')):
             with self.subTest(expected=expected):
-                result = self.check(caller=example.replace('REPLACE_WITH_CENTRAL_COMMIT_SHA', '0' * 40), expected=expected)
+                self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.1\n', example + '\n')
+                result = self.check(caller=example, expected=expected)
                 self.assertEqual(result.returncode, 0, result.stderr)

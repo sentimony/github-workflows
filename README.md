@@ -35,11 +35,18 @@ configuration validation still applies.
 
 ## Callers
 
-Replace `REPLACE_WITH_CENTRAL_COMMIT_SHA` with the actual full immutable central commit
-SHA. `workflow_run` uses the workflow on the default branch, so land the central workflow
-first, then repin both caller branches to the merged central SHA, then merge the
-consumers. A branch pin is preparatory until central merge; live equivalence requires runs
-against the new callee. Update both pins when adopting a new central version.
+Squash-merge the central workflow into `main`, then create the `v0.0.1` tag on the
+merged commit, push it to origin, and confirm it resolves before adopting it in either
+caller. The examples and caller changes are preparatory until that tag exists; live
+equivalence requires runs against the tagged callee. `workflow_run` uses the caller
+workflow on its default branch.
+
+Release tags are immutable: never move or recreate one. For later changes, create a new
+patch tag on the merged central commit, push it to origin, confirm it resolves, and
+update both callers to that exact tag before merging their changes.
+
+The [transport contract](AUTO_REVIEWER_TRANSPORT.md) defines the review draft, ledger,
+and host actions.
 
 Agentic workflow (`validate`):
 
@@ -69,7 +76,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@REPLACE_WITH_CENTRAL_COMMIT_SHA
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.1
     with:
       required-ci-job: validate
       pr: ${{ inputs.pr || '' }}
@@ -107,7 +114,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@REPLACE_WITH_CENTRAL_COMMIT_SHA
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.1
     with:
       required-ci-job: check
       pr: ${{ inputs.pr || '' }}

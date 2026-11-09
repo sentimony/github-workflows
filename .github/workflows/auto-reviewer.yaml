@@ -905,8 +905,11 @@ jobs:
 
             Write exactly one pull request review body in English, with plain hyphens only (the ` · ` of the two
             closing lines excepted), to .auto-review/review.md, and its inline comments to
-            .auto-review/comments.json and the action draft below; do not write or edit any other file. Do not post them; a later step posts
-            them as one review that neither approves nor requests changes.
+            .auto-review/comments.json and the action draft below; do not write or edit any other file.
+            .auto-review/review.md is this caller's persistence destination for the complete report and target
+            identity. Do not create the default local archive or identity.json. This workflow's output and
+            closing-line instructions override the skill's generic defaults. Do not post these files; a later
+            step posts them as one review that neither approves nor requests changes.
 
             Keep the body compact: a reader sees the verdicts and the readiness at a glance, and opens every
             other detail, the findings and the target included, on demand from the one collapsed `<details>`
@@ -957,6 +960,8 @@ jobs:
             #### Set aside, open questions, and review gaps
 
             The set-aside list, open questions, and review gaps.
+            Preserve all evidence from the complete report within these Details sections, including evidence
+            attribution, uncheckable items, and strengths when present.
 
             </details>
 
@@ -989,7 +994,7 @@ jobs:
 
             Never copy a token or secret into the body or the comments. Write GitHub logins, team names, and any
             other text that starts with @ inside backticks, so the posted review notifies nobody.
-            End the body with the two CI closing lines that the cr-request skill states: the signature line
+            End the body with the two closing lines specified by this workflow: the signature line
             below, backticks included, then the `Next step` line as the very last line. In that line each skill
             is inline code with a leading slash, its arguments inside the code span, and ` · ` goes before a
             reason; pick the line by the result:
@@ -1002,7 +1007,7 @@ jobs:
             - Any other result: ``Next step: `/<skill>` · <reason>``; `none` stays plain text
               (`Next step: none · <reason>`).
             The publish step cuts the reason after ` · ` and leaves the first two forms whole. The ` · ` and
-            ` -> ` in these two lines are the required format, not dashes. The skill writes the signature without
+            ` -> ` in these two lines are the required format, not dashes. Write the signature without
             a duration; the workflow appends the review duration to it afterwards as ` · In <m> min <s> sec`.
             The signature line:
             Reviewed with: `/cr-request` ${{ steps.skill.outputs.version }} skill

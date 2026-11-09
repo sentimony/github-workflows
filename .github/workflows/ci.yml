@@ -18,7 +18,7 @@ jobs:
         run: |
           python3 - <<'PYCODE'
           import sys, unittest
-          suite = unittest.defaultTestLoader.discover('scripts', pattern='test_*.py')
+          suite = unittest.defaultTestLoader.discover('tests', pattern='test_*.py')
           if suite.countTestCases() == 0:
               sys.exit('no tests discovered')
           result = unittest.TextTestRunner(verbosity=2).run(suite)

@@ -4,12 +4,12 @@ import subprocess
 import tempfile
 import unittest
 
-from check_auto_reviewer_contract import load
+from scripts.check_auto_reviewer_contract import load
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / 'scripts/check_auto_reviewer_contract.py'
 WORKFLOW = ROOT / '.github/workflows/auto-reviewer.yaml'
-RELEASED = ROOT / 'scripts/fixtures/auto-reviewer/v0.0.2-contract.json'
+RELEASED = ROOT / 'tests/fixtures/auto-reviewer/v0.0.2-contract.json'
 CALLER = '''name: Auto Reviewer
 on: [workflow_dispatch]
 permissions:

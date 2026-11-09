@@ -156,7 +156,7 @@ jobs:
 
 ## Offline checks
 
-Run `python3 -m unittest discover -s scripts -p 'test_*.py'` and
+From the repository root, run `python3 -m unittest discover -s tests -p 'test_*.py'` and
 `actionlint .github/workflows/*.yaml .github/workflows/*.yml`. To validate a caller
 against this checkout, run:
 

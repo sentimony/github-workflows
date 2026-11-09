@@ -194,7 +194,7 @@ class LedgerTest(unittest.TestCase):
         run=step('Publish review actions')
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh',root/'gh')
+            os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh',root/'gh')
             actions={'schema_version':1,'repository':'owner/repo','pr_number':42,'head_sha':'a'*40,
                      'review_source_id':None,'findings':[{'origin_review_id':None,'original_id':'R2-F1','path':'a.py','severity':'Minor'}],
                      'previous_findings':[]}
@@ -266,7 +266,7 @@ class DeferTest(unittest.TestCase):
         run=pipeline_script()
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh_defer',root/'gh')
+            os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh_defer',root/'gh')
             sha='a'*40
             finding={'origin_review_id':101,'original_id':'R1-F1','path':'a.py','severity':'Important'}
             proposal={'schema_version':1,'repository':'owner/repo','pr_number':42,'head_sha':sha,**{k:finding[k] for k in ('origin_review_id','original_id','path')},'disposition':'DEFER','reason':'Can wait','owner':'alice'}
@@ -434,7 +434,7 @@ class ResolverRunTest(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name)
-        os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh_defer',self.root/'gh')
+        os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh_defer',self.root/'gh')
         sha='a'*40
         self.finding={'origin_review_id':101,'original_id':'R1-F1','path':'a.py','severity':'Important'}
         f=self.finding
@@ -1004,7 +1004,7 @@ class SummaryRefreshTest(unittest.TestCase):
         jobs=self.workflow()['jobs']; self.assertIn('refresh_merged_summary',jobs)
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh_summary',root/'gh')
+            os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh_summary',root/'gh')
             state={'merged':True,'reviews':[],'comments':[],'threads':[]}
             (root/'state.json').write_text(json.dumps(state))
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],
@@ -1027,7 +1027,7 @@ class SummaryRefreshTest(unittest.TestCase):
         self.assertEqual(job['env']['SUMMARY_REFRESH'],'true')
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh_summary',root/'gh')
+            os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh_summary',root/'gh')
             (root/'state.json').write_text(json.dumps({'merged':False,'reviews':[],'comments':[]}))
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],
                  'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42',
@@ -1389,7 +1389,7 @@ class SummaryRunTest(unittest.TestCase):
     def run_summary(self, state, repeat=False):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh_summary',root/'gh')
+            os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh_summary',root/'gh')
             (root/'state.json').write_text(json.dumps(state))
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'], 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42'}
             def invoke(name):
@@ -1608,7 +1608,7 @@ class SummaryRunTest(unittest.TestCase):
 
     def test_unmerged_rejected_before_write_and_existing_comment_updated(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); os.symlink(ROOT/'scripts/fixtures/auto-reviewer/gh_summary',root/'gh')
+            root=Path(tmp); os.symlink(ROOT/'tests/fixtures/auto-reviewer/gh_summary',root/'gh')
             (root/'state.json').write_text(json.dumps({'merged':False,'reviews':[self.review()]}))
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42'}
             result=subprocess.run(['bash','-eo','pipefail','-c',step('Gather merged review summary')],cwd=root,env=env,capture_output=True,text=True)

@@ -90,14 +90,16 @@ INSTALLER
             sleep=binary/'sleep'; sleep.write_text('#!/bin/bash\necho "$1" >> "$HOME/sleeps"\n'); sleep.chmod(0o755)
             env={**os.environ,'HOME':str(home),'PATH':str(binary)+os.pathsep+os.environ['PATH'],
                  'COUNT':str(root/'count'),'FAILURES':str(failures),'MISSING':str(int(missing)),
-                 'GITHUB_OUTPUT':str(root/'output')}
+                 'GITHUB_OUTPUT':str(root/'output'),'GITHUB_STEP_SUMMARY':str(root/'summary')}
             result=subprocess.run(['bash','-eo','pipefail','-c',step('Install latest Claude Code')],env=env,capture_output=True,text=True)
             read=lambda p: p.read_text() if p.exists() else ''
+            result.summary=read(root/'summary')
             return result,read(root/'output'),read(home/'channel'),read(home/'version-arg'),read(root/'count'),read(home/'sleeps'),str(cli)
 
     def test_latest_installer_and_executable_output(self):
         result,output,channel,version,count,sleeps,cli=self.install()
         self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(result.summary,'Claude Code installed from native latest: `test-claude`\n')
         self.assertEqual(channel,'latest\n')
         self.assertEqual(version,'--version\n')
         self.assertEqual(output,'path='+cli+'\n')

@@ -11,7 +11,8 @@ workflow; `required-ci-job` names the CI job checked by the gate. These are sepa
 names.
 
 The runner installs Claude Code from the native `latest` channel on each review run,
-checks that executable with `--version`, and passes its path to the pinned
+checks that executable with `--version`, records the version in the step summary,
+and passes its path to the pinned
 `anthropics/claude-code-action`. The CLI version can change between runs; the action SHA
 and the released-tag/SHA skill installer remain unchanged. Installation retries up to
 three times and stops the review if every attempt fails. The review duration starts

@@ -846,6 +846,8 @@ jobs:
           test -n "$version" || { echo "::error::No version in the cr-request SKILL.md"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      # Owner accepts the moving native latest installer/CLI to avoid waiting for action version bumps.
+      # This step receives no secrets and runs under the review job's read-only permissions.
       - name: Install latest Claude Code
         id: claude_cli
         shell: bash
@@ -861,7 +863,10 @@ jobs:
           [ "$installed" = true ] || { echo "::error::Claude Code installation failed after three attempts"; exit 1; }
           cli="$HOME/.local/bin/claude"
           [ -x "$cli" ] || { echo "::error::Claude Code executable is missing"; exit 1; }
-          "$cli" --version
+          version="$("$cli" --version)"
+          printf '%s\n' "$version"
+          # shellcheck disable=SC2016 # Backticks format the installed version as Markdown code.
+          printf 'Claude Code installed from native latest: `%s`\n' "$version" >> "$GITHUB_STEP_SUMMARY"
           printf 'path=%s\n' "$cli" >> "$GITHUB_OUTPUT"
 
       # Model and effort come from repository variables; values are checked before they reach claude_args,

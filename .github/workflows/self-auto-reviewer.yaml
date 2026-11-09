@@ -1,4 +1,4 @@
-name: Auto Reviewer
+name: Self Auto Reviewer
 
 on:
   workflow_run:

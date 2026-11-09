@@ -71,7 +71,7 @@ class ContractTest(unittest.TestCase):
         result = self.check(workflow=RELEASED.read_text(), caller=caller)
         self.assertEqual(result.returncode, 0, result.stderr)
         workflow = load(str(path))
-        self.assertEqual(workflow['name'], 'Auto Reviewer')
+        self.assertEqual(workflow['name'], 'Self Auto Reviewer')
         self.assertNotIn('concurrency', workflow)
         self.assertEqual(set(workflow['jobs']), {'auto_review'})
         job = workflow['jobs']['auto_review']

@@ -199,7 +199,7 @@ class LedgerTest(unittest.TestCase):
                      'review_source_id':None,'findings':[{'origin_review_id':None,'original_id':'R2-F1','path':'a.py','severity':'Minor'}],
                      'previous_findings':[]}
             (root/'actions.json').write_text(json.dumps(actions))
-            (root/'post.md').write_text('<!-- claude-review sha='+('a'*40)+' -->\n\nReviewed with: `/cr-request` 0.0.11 skill · In 1 min 3 sec\nNext step: `/verify`\n')
+            (root/'post.md').write_text('<!-- claude-review sha='+('a'*40)+' -->\n\nReviewed with: `cr-request@v0.0.11` skill · In 1 min 3 sec\nNext step: `/verify`\n')
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'FIXTURE_DIR':str(root),
                  'REPO':'owner/repo','NUMBER':'42','HEAD_SHA':'a'*40,'REVIEW_ID':'202','GITHUB_RUN_ID':'303',
                  'REVIEWER':'so-upstars','ACTIONS_FILE':str(root/'actions.json'),'POST_FILE':str(root/'post.md'),**override}
@@ -277,7 +277,7 @@ class DeferTest(unittest.TestCase):
             thread={'id':'thread1','path':'a.py','isResolved':False,'comments':[comment(1001,'so-upstars','**Important** R1-F1 - issue',{'databaseId':101}),comment(1002,'alice','<!-- cr-received-disposition:v1 '+json.dumps(proposal)+' -->',None)]}
             (root/'state.json').write_text(json.dumps({'origin':origin,'thread':thread}))
             (root/'actions.json').write_text(json.dumps({'schema_version':1,'repository':'owner/repo','pr_number':42,'head_sha':sha,'review_source_id':None,'findings':[],'previous_findings':[prev]}))
-            (root/'post.md').write_text('| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | 0 | 0 | 0 |\n**Readiness:** ready with fixes\n\nReviewed with: `/cr-request` 0.0.11 skill · In 0 min 2 sec\nNext step: `/cr-received PR #42`\n')
+            (root/'post.md').write_text('| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | 0 | 0 | 0 |\n**Readiness:** ready with fixes\n\nReviewed with: `cr-request@v0.0.11` skill · In 0 min 2 sec\nNext step: `/cr-received PR #42`\n')
             (root/'output').touch()
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42','HEAD_SHA':sha,'REVIEW_ID':'202','GITHUB_RUN_ID':'303','GITHUB_OUTPUT':str(root/'output'),'REVIEWER':'so-upstars','ACTIONS_FILE':str(root/'actions.json'),'POST_FILE':str(root/'post.md')}
             first=subprocess.run(['bash','-eo','pipefail','-c',run],env={**env,'FAIL_REPLY':'1'},capture_output=True,text=True)
@@ -302,7 +302,7 @@ class DeferTest(unittest.TestCase):
             self.assertEqual(second.returncode,0,second.stderr)
             state=json.loads((root/'state.json').read_text())
             self.assertTrue(state['thread']['isResolved'])
-            self.assertIn('Next step: `/verify` -> `/finalize` squash',state['body'])
+            self.assertIn('Next step: `/verify -> /finalize squash`',state['body'])
             self.assertIn('**Readiness:** Ready',state['body'])
             trace=[json.loads(x) for x in (root/'trace.jsonl').read_text().splitlines()]
             self.assertEqual(sum(x['method']=='POST' and x['endpoint']=='repos/owner/repo/issues' for x in trace),1)
@@ -326,7 +326,7 @@ class DeferTest(unittest.TestCase):
             # A body-only source cannot authorize issue, reply or resolve; it remains visible as a gap.
             (root/'state.json').write_text(json.dumps({'origin':origin,'thread':{'id':'thread1','path':'other.py','isResolved':False,'comments':thread['comments']}}))
             (root/'trace.jsonl').write_text('')
-            (root/'post.md').write_text('| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | 0 | 0 | 0 |\n**Readiness:** ready with fixes\n\nReviewed with: `/cr-request` 0.0.11 skill · In 0 min 2 sec\nNext step: `/cr-received PR #42`\n')
+            (root/'post.md').write_text('| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | 0 | 0 | 0 |\n**Readiness:** ready with fixes\n\nReviewed with: `cr-request@v0.0.11` skill · In 0 min 2 sec\nNext step: `/cr-received PR #42`\n')
             missing=subprocess.run(['bash','-eo','pipefail','-c',run],env=env,capture_output=True,text=True)
             self.assertNotEqual(missing.returncode,0)
             missing_state=json.loads((root/'state.json').read_text())
@@ -473,7 +473,7 @@ class ResolverRunTest(unittest.TestCase):
         (self.root/'post.md').write_text('<!-- claude-review sha='+('a'*40)+' -->\n'
             '| Intent | System | Craft | Critical | Important | Minor |\n'
             '| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | 0 | 0 | 0 |\n'
-            '**Readiness:** Ready with fixes\n\nReviewed with: `/cr-request` 0.0.11 skill · In 0 min 2 sec\n'
+            '**Readiness:** Ready with fixes\n\nReviewed with: `cr-request@v0.0.11` skill · In 0 min 2 sec\n'
             'Next step: `/cr-received PR #42`\n')
         (self.root/'output').write_text(''); (self.root/'trace.jsonl').write_text('')
 
@@ -682,7 +682,7 @@ class ResolverRunTest(unittest.TestCase):
     def test_actual_status_waits_for_completion_and_readback(self):
         self.prepare()
         extra={'GH_TOKEN':'fixture-status','POST_OUTCOME':'success','LEDGER_OUTCOME':'skipped',
-               'DEFERRED_COMPLETE':'','SIGNATURE':'Reviewed with: `/cr-request`','SUMMARY':'pending actions',
+               'DEFERRED_COMPLETE':'','SIGNATURE':'Reviewed with: `cr-request@v0.0.11` skill','SUMMARY':'pending actions',
                'STATE':'failure','VALIDATED_AT':'2026-10-30T00:00:00Z','JOB_STATUS':'success',
                'CONTEXT':'Auto Reviewer','RUN_URL':'https://github.com/owner/repo/actions/runs/303',
                'MARKER':'<!-- claude-review sha='+('a'*40)+' -->'}
@@ -811,6 +811,8 @@ class FooterTest(unittest.TestCase):
         fragment=script[start:end]
         signature='Reviewed with: `/cr-request` 0.0.11 skill · In 3 min 12 sec'
         accepts=['Next step: `/cr-received` · 4 findings to rule on','Next step: none','Next step: none · nothing to rule on','Next step: `/verify docs/plans/x.md` -> `/finalize` squash','Next step: `/verify` -> `/finalize` squash','Next step: `/cr-received PR #16`']
+        accepts += ['Next step: `/verify -> /finalize squash`',
+                    'Next step: `/verify docs/plans/x.md -> /finalize squash`']
         rejects=['Next step: cr-received - 4 findings','Next step: ','Next step: `/cr-received` - 4 findings','Next step: none - nothing to rule on','Next step: `/verify` - `/finalize` squash']
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'body'
@@ -836,8 +838,12 @@ class FooterTest(unittest.TestCase):
         fragment='fail() { exit 1; }\n'+script[start:end]
         base='Reviewed with: `/cr-request` 0.0.11 skill · In 3 min 12 sec'
         accepts=[base,base+' · claude-sonnet-5-5 medium · 12345 tokens · $0.4321',base+' · claude-fable-5-1[1m] high · 1 tokens · $12.0000']
+        modern='Reviewed with: `cr-request@v0.0.11` skill · In 3 min 12 sec'
+        accepts += [modern, modern+' · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452']
         rejects=[base+' · claude-sonnet-5-5 medium · 12345 tokens · $0.43',base+' · claude-sonnet-5-5 xhigh · 1 tokens · $0.4321',
-                 base+' · claude-sonnet-5-5 medium · 12345 tokens',base+' · $0.4321']
+                 base+' · claude-sonnet-5-5 medium · 12345 tokens',base+' · $0.4321',
+                 modern+' · `claude-sonnet-5-5 medium` · 13,24 tokens · $0.1452',
+                 modern+' · `claude-sonnet-5-5 medium · 132,478 tokens · $0.1452']
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'body'
             for signature in accepts+rejects:
@@ -878,15 +884,15 @@ class ReadinessTest(unittest.TestCase):
                 self.assertIn(f'review={str(allowed).lower()}', output)
 
 class UsageRecordTest(unittest.TestCase):
-    def run_duration(self, execution, model='claude-sonnet-5-5', effort='medium', raw=None):
+    def run_duration(self, execution, model='claude-sonnet-5-5', effort='medium', raw=None, version='0.0.11', elapsed=125):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'.auto-review').mkdir()
-            sig='Reviewed with: `/cr-request` 0.0.11 skill'
+            sig=f'Reviewed with: `cr-request@v{version}` skill'
             (root/'.auto-review/review.md').write_text('<!-- m -->\nbody\n\n'+sig+'\nNext step: `/cr-received PR #1`\n')
             env={**os.environ,'START':'0','SIGNATURE':sig,'SEP':' · ','USAGE_MODEL':model,'USAGE_EFFORT':effort}
             if execution is not None:
                 (root/'exec.json').write_text(raw if raw is not None else json.dumps(execution)); env['EXEC_FILE']=str(root/'exec.json')
-            run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))','elapsed=125')
+            run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))',f'elapsed={elapsed}')
             result=subprocess.run(['bash','-eo','pipefail','-c',run],cwd=root,env=env,capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
             return (root/'.auto-review/review.md').read_text().splitlines()[-2]
@@ -894,10 +900,18 @@ class UsageRecordTest(unittest.TestCase):
     def test_usage_is_appended_to_the_signature(self):
         result={'type':'result','total_cost_usd':0.43215,'usage':{'input_tokens':100,'output_tokens':20,'cache_creation_input_tokens':3,'cache_read_input_tokens':900},'modelUsage':{}}
         line=self.run_duration([{'type':'system'},result])
-        self.assertEqual(line,'Reviewed with: `/cr-request` 0.0.11 skill · In 2 min 5 sec · claude-sonnet-5-5 medium · 1023 tokens · $0.4321')
+        self.assertEqual(line,'Reviewed with: `cr-request@v0.0.11` skill · In 2 min 5 sec · `claude-sonnet-5-5 medium` · 1,023 tokens · $0.4321')
+
+    def test_exact_requested_footer_example(self):
+        usage={'type':'result','total_cost_usd':0.1452,'usage':{'input_tokens':132478}}
+        line=self.run_duration([usage], version='0.0.16', elapsed=39)
+        self.assertEqual(line,'Reviewed with: `cr-request@v0.0.16` skill · In 0 min 39 sec · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452')
+        workflow=WORKFLOW.read_text()
+        self.assertEqual(workflow.count('Reviewed with: `cr-request@v${{ steps.skill.outputs.version }}` skill'),2)
+        self.assertIn('Next step: `/verify -> /finalize squash`',workflow)
 
     def test_missing_or_unreadable_usage_leaves_duration_only(self):
-        duration='Reviewed with: `/cr-request` 0.0.11 skill · In 2 min 5 sec'
+        duration='Reviewed with: `cr-request@v0.0.11` skill · In 2 min 5 sec'
         self.assertEqual(self.run_duration(None),duration)
         self.assertEqual(self.run_duration([],raw='not json'),duration)
         self.assertEqual(self.run_duration([{'type':'system'}]),duration)
@@ -1414,6 +1428,17 @@ class SummaryRunTest(unittest.TestCase):
         self.assertIn('| 2 | claude-opus-5-5 | high | 2500 | $1.00 |',body)
         self.assertIn('| 3 | unknown | unknown | unknown | unknown |',body)
         self.assertIn('| Total (measured 2/3) | | | 3500 | $1.25 |',body)
+
+    def test_summary_reads_new_footer_and_legacy_usage_together(self):
+        modern='Reviewed with: `cr-request@v0.0.16` skill · In 0 min 39 sec · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452'
+        legacy='Reviewed with: `/cr-request` 0.0.11 skill · In 0 min 20 sec · claude-sonnet-5-5 medium · 1000 tokens · $0.2500'
+        first=self.with_signature({'id':101,'user':{'login':'so-upstars'},'body':''}, modern)
+        second=self.with_signature(self.review(102), legacy)
+        state,_=self.run_summary({'reviews':[first,second]})
+        body=state['comments'][0]['body']
+        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 132478 | $0.15 |',body)
+        self.assertIn('| Total (measured 2/2) | | | 133478 | $0.40 |',body)
+        self.assertIn('| Duration total | 59 sec |',body)
 
     def test_summary_without_recorded_usage_is_unknown(self):
         state,_=self.run_summary({'reviews':[self.review()]})

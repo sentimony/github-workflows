@@ -14,10 +14,11 @@ names.
 
 1. `required-ci-job` is a required string. It must match `[A-Za-z_][A-Za-z0-9_-]*`.
 2. `pr` and `pr_number` are optional strings with empty defaults for manual dispatch.
-3. Bind both required secrets explicitly: `YNGWALD_PR_TOKEN` and
-   `CLAUDE_CODE_OAUTH_TOKEN`. Secret names alone do not guarantee nonempty values for fork
-   or bot events. Existing eligibility guards remain in place; live startup validation of
-   secret availability remains a gap.
+3. Bind both required callee secret inputs explicitly: `YNGWALD_PR_TOKEN` and
+   `CLAUDE_CODE_OAUTH_TOKEN`. The callers below map `YNGWALD_PR_TOKEN` to the repository
+   secret `AUTO_REVIEWER_YNGWALD`. Secret names alone do not guarantee nonempty values for
+   fork or bot events. Existing eligibility guards remain in place; live startup validation
+   of secret availability remains a gap.
 
 The caller must declare an explicit permission ceiling covering the union of permissions
 used by the callee jobs. The caller job must omit `concurrency`, `runs-on`, and `steps`.
@@ -40,15 +41,31 @@ configuration validation still applies.
 
 ### Callers
 
-Squash-merge the central workflow into `main`, then create the `v0.0.1` tag on the
-merged commit, push it to origin, and confirm it resolves before adopting it in either
-caller. The examples and caller changes are preparatory until that tag exists; live
-equivalence requires runs against the tagged callee. `workflow_run` uses the caller
-workflow on its default branch.
+Callers use the published `v0.0.1` tag. `workflow_run` uses the caller workflow
+definition on its default branch; pull request events use the PR branch copy.
+`workflow_dispatch` becomes available once the workflow exists on the default branch.
+Live equivalence requires runs against the tagged callee.
 
 Release tags are immutable: never move or recreate one. For later changes, create a new
 patch tag on the merged central commit, push it to origin, confirm it resolves, and
-update both callers to that exact tag before merging their changes.
+update callers to that exact tag before merging their changes.
+
+This repository's `.github/workflows/self-auto-reviewer.yaml` calls the published
+reusable workflow in `.github/workflows/auto-reviewer.yaml` with the `validate` CI job.
+Configure Actions secrets in each consumer repository:
+
+1. Create `AUTO_REVIEWER_YNGWALD` and `CLAUDE_CODE_OAUTH_TOKEN`, with separate token
+   values for each repository.
+2. Update the caller to read `secrets.AUTO_REVIEWER_YNGWALD`, as shown below.
+3. Delete the old repository secret `YNGWALD_PR_TOKEN` after all workflows in that
+   repository use the new secret name.
+
+The published `v0.0.1` callee still requires the input key `YNGWALD_PR_TOKEN` on the
+left side of the mapping. Its value on the right reads `secrets.AUTO_REVIEWER_YNGWALD`;
+consumers do not need a repository secret named `YNGWALD_PR_TOKEN`. Renaming the callee
+input requires a new release and an update to the callers' version pins.
+
+CI runs on branch pushes, pull requests, and manual dispatch. Tag pushes do not trigger it.
 
 The [transport contract](AUTO_REVIEWER_TRANSPORT.md) defines the review draft, ledger,
 and host actions.
@@ -87,7 +104,7 @@ jobs:
       pr: ${{ inputs.pr || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
     secrets:
-      YNGWALD_PR_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
@@ -125,7 +142,7 @@ jobs:
       pr: ${{ inputs.pr || '' }}
       pr_number: ${{ inputs.pr_number || '' }}
     secrets:
-      YNGWALD_PR_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 

@@ -4,6 +4,8 @@ import subprocess
 import tempfile
 import unittest
 
+from check_auto_reviewer_contract import load
+
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / 'scripts/check_auto_reviewer_contract.py'
 WORKFLOW = ROOT / '.github/workflows/auto-reviewer.yaml'
@@ -21,7 +23,7 @@ jobs:
     with:
       required-ci-job: validate
     secrets:
-      YNGWALD_PR_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}
+      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 '''
 
@@ -41,6 +43,29 @@ class ContractTest(unittest.TestCase):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_self_caller_matches_callee_contract(self):
+        path = ROOT / '.github/workflows/self-auto-reviewer.yaml'
+        caller = path.read_text()
+        result = self.check(caller=caller)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        workflow = load(str(path))
+        self.assertEqual(workflow['name'], 'Auto Reviewer')
+        self.assertNotIn('concurrency', workflow)
+        self.assertEqual(set(workflow['jobs']), {'auto_review'})
+        job = workflow['jobs']['auto_review']
+        self.assertEqual(job['uses'],
+                         'sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.1')
+        self.assertNotIn('concurrency', job)
+        self.assertEqual(job['secrets']['YNGWALD_PR_TOKEN'],
+                         '${{ secrets.AUTO_REVIEWER_YNGWALD }}')
+        self.assertEqual(job['secrets']['CLAUDE_CODE_OAUTH_TOKEN'],
+                         '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}')
+
+        ci = load(str(ROOT / '.github/workflows/ci.yml'))
+        events = ci.get('on', ci.get('true'))
+        self.assertEqual(set(events), {'push', 'pull_request', 'workflow_dispatch'})
+        self.assertEqual(events['push'], {'branches': ['**']})
+
     def test_contract_mutations_fail(self):
         original = WORKFLOW.read_text()
         cases = {
@@ -49,7 +74,7 @@ class ContractTest(unittest.TestCase):
             'missing input': (original, CALLER.replace('      required-ci-job: validate\n', "      pr: ''\n")),
             'wrong type': (original, CALLER.replace('required-ci-job: validate', 'required-ci-job: 123')),
             'unknown input': (original, CALLER.replace('      required-ci-job:', '      typo: value\n      required-ci-job:')),
-            'missing secret': (original, CALLER.replace('      YNGWALD_PR_TOKEN: ${{ secrets.YNGWALD_PR_TOKEN }}\n', '')),
+            'missing secret': (original, CALLER.replace('      YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', '')),
             'unknown secret': (original, CALLER.replace('    secrets:', '    secrets:\n      EXTRA: value')),
             'inherit': (original, CALLER[0:CALLER.index('    secrets:')] + '    secrets: inherit\n'),
             'missing status permission': (original, CALLER.replace('  statuses: write\n', '')),
@@ -116,5 +141,6 @@ class ContractTest(unittest.TestCase):
         for example, expected in zip(examples, ('validate', 'check')):
             with self.subTest(expected=expected):
                 self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.1\n', example + '\n')
+                self.assertIn('YNGWALD_PR_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', example + '\n')
                 result = self.check(caller=example, expected=expected)
                 self.assertEqual(result.returncode, 0, result.stderr)

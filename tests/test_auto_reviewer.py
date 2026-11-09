@@ -209,7 +209,7 @@ class DraftTest(unittest.TestCase):
         self.assertNotEqual(self.run_draft(lambda d: d['previous_findings'].append(finding)).returncode,0)
 
 class LedgerTest(unittest.TestCase):
-    def run_ledger(self, **override):
+    def run_ledger(self, signature=None, **override):
         run=step('Publish review actions')
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
@@ -218,7 +218,9 @@ class LedgerTest(unittest.TestCase):
                      'review_source_id':None,'findings':[{'origin_review_id':None,'original_id':'R2-F1','path':'a.py','severity':'Minor'}],
                      'previous_findings':[]}
             (root/'actions.json').write_text(json.dumps(actions))
-            (root/'post.md').write_text('<!-- claude-review sha='+('a'*40)+' -->\n\nReviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `cr-request@v0.0.11` skill · In 1 min 3 sec\nNext step: `/verify`\n')
+            if signature is None:
+                signature='Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill · In `1 min 3 sec`'
+            (root/'post.md').write_text('<!-- claude-review sha='+('a'*40)+' -->\n\n'+signature+'\nNext step: `/verify`\n')
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'FIXTURE_DIR':str(root),
                  'REPO':'owner/repo','NUMBER':'42','HEAD_SHA':'a'*40,'REVIEW_ID':'202','GITHUB_RUN_ID':'303',
                  'REVIEWER':'so-upstars','ACTIONS_FILE':str(root/'actions.json'),'POST_FILE':str(root/'post.md'),**override}
@@ -226,6 +228,13 @@ class LedgerTest(unittest.TestCase):
             trace=[json.loads(x) for x in (root/'trace.jsonl').read_text().splitlines()]
             body=(root/'body').read_text() if (root/'body').exists() else ''
             return result,trace,body
+
+    def test_split_skill_only_footer_keeps_ledger_and_duration(self):
+        result,trace,body=self.run_ledger(signature='Reviewed with: `cr-request` `v0.0.11` skill · In `1 min 3 sec`')
+        self.assertEqual(result.returncode,0,result.stderr)
+        marker=body.split('<!-- claude-review-ledger:v1 ',1)[1].split(' -->',1)[0]
+        self.assertEqual(json.loads(marker)['duration_seconds'],63)
+        self.assertIn('Reviewed with: `cr-request` `v0.0.11` skill',body)
 
     def test_canonical_nulls_and_put_readback(self):
         result,trace,body=self.run_ledger()
@@ -492,7 +501,7 @@ class ResolverRunTest(unittest.TestCase):
         (self.root/'post.md').write_text('<!-- claude-review sha='+('a'*40)+' -->\n'
             '| Intent | System | Craft | Critical | Important | Minor |\n'
             '| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | 0 | 0 | 0 |\n'
-            '**Readiness:** Ready with fixes\n\nReviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `cr-request@v0.0.11` skill · In 0 min 2 sec\n'
+            '**Readiness:** Ready with fixes\n\nReviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill · In `0 min 2 sec`\n'
             'Next step: `/cr-received PR #42`\n')
         (self.root/'output').write_text(''); (self.root/'trace.jsonl').write_text('')
 
@@ -701,7 +710,7 @@ class ResolverRunTest(unittest.TestCase):
     def test_actual_status_waits_for_completion_and_readback(self):
         self.prepare()
         extra={'GH_TOKEN':'fixture-status','POST_OUTCOME':'success','LEDGER_OUTCOME':'skipped',
-               'DEFERRED_COMPLETE':'','SIGNATURE':'Reviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `cr-request@v0.0.11` skill','SUMMARY':'pending actions',
+               'DEFERRED_COMPLETE':'','SIGNATURE':'Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill','SUMMARY':'pending actions',
                'STATE':'failure','VALIDATED_AT':'2026-10-30T00:00:00Z','JOB_STATUS':'success',
                'CONTEXT':'Auto Reviewer','RUN_URL':'https://github.com/owner/repo/actions/runs/303',
                'MARKER':'<!-- claude-review sha='+('a'*40)+' -->'}
@@ -828,7 +837,7 @@ class FooterTest(unittest.TestCase):
         start=script.index("tail2=$(tr -d")
         end=script.index('          # The Next step line loses') if '          # The Next step line loses' in script else script.index('# The Next step line loses')
         fragment=script[start:end]
-        signature='Reviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `/cr-request` 0.0.11 skill · In 3 min 12 sec'
+        signature='Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill · In `3 min 12 sec`'
         accepts=['Next step: `/cr-received` · 4 findings to rule on','Next step: none','Next step: none · nothing to rule on','Next step: `/verify docs/plans/x.md` -> `/finalize` squash','Next step: `/verify` -> `/finalize` squash','Next step: `/cr-received PR #16`']
         accepts += ['Next step: `/verify -> /finalize squash`',
                     'Next step: `/verify docs/plans/x.md -> /finalize squash`']
@@ -860,31 +869,43 @@ class FooterTest(unittest.TestCase):
             path=Path(tmp)/'body'
             for ref,expected_identity,accepted in cases:
                 with self.subTest(ref=ref,identity=expected_identity):
-                    prefix=f'`auto-reviewer.yaml@{ref}` workflow · ' if ref is not None else ''
-                    path.write_text('Reviewed with: '+prefix+'`cr-request@v0.0.16` skill · In 0 min 39 sec\nNext step: `/verify -> /finalize squash`\n')
+                    prefix=f'`auto-reviewer.yaml` `{ref}` workflow · ' if ref is not None else ''
+                    path.write_text('Reviewed with: '+prefix+'`cr-request` `v0.0.16` skill · In `0 min 39 sec`\nNext step: `/verify -> /finalize squash`\n')
                     env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.16','WORKFLOW_IDENTITY':expected_identity}
                     result=subprocess.run(['bash','-c',fragment],env=env,capture_output=True,text=True)
                     self.assertEqual(result.returncode==0,accepted,result.stderr)
 
+    def test_separate_code_spans_match_requested_footer(self):
+        script=step('Validate review body')
+        fragment='fail() { exit 1; }\n'+script[script.index('tail2=$(tr -d'):script.index('# The Next step line loses')]
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'body'
+            path.write_text('Reviewed with: `auto-reviewer.yaml` `1a0e98e59aa772bb4c0b77d2dc4d2f9c6110e04e` workflow · `cr-request` `v0.0.16` skill · In `0 min 55 sec` · `claude-sonnet-5-5` `medium` · `289,723 tokens` · `$0.3138`\nNext step: `/verify -> /finalize squash`\n')
+            env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.16','WORKFLOW_IDENTITY':'auto-reviewer.yaml@1a0e98e59aa772bb4c0b77d2dc4d2f9c6110e04e'}
+            result=subprocess.run(['bash','-c',fragment],env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+
     def test_signature_accepts_recorded_usage_only_in_its_format(self):
         script=step('Validate review body')
-        start=script.index("tail2=$(tr -d")
-        end=script.index('# The Next step line loses')
-        fragment='fail() { exit 1; }\n'+script[start:end]
-        base='Reviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `/cr-request` 0.0.11 skill · In 3 min 12 sec'
-        accepts=[base,base+' · claude-sonnet-5-5 medium · 12345 tokens · $0.4321',base+' · claude-fable-5-1[1m] high · 1 tokens · $12.0000']
-        modern='Reviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `cr-request@v0.0.11` skill · In 3 min 12 sec'
-        accepts += [modern, modern+' · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452']
-        rejects=[base+' · claude-sonnet-5-5 medium · 12345 tokens · $0.43',base+' · claude-sonnet-5-5 xhigh · 1 tokens · $0.4321',
-                 base+' · claude-sonnet-5-5 medium · 12345 tokens',base+' · $0.4321',
-                 modern+' · `claude-sonnet-5-5 medium` · 13,24 tokens · $0.1452',
-                 modern+' · `claude-sonnet-5-5 medium · 132,478 tokens · $0.1452']
+        fragment='fail() { exit 1; }\n'+script[script.index('tail2=$(tr -d'):script.index('# The Next step line loses')]
+        base='Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill · In `3 min 12 sec`'
+        accepts=[base,base+' · `claude-sonnet-5-5` `medium` · `132,478 tokens` · `$0.1452`',
+                 base+' · `claude-fable-5-1[1m]` `high` · `1 tokens` · `$12.0000`',
+                 base+' · `claude-sonnet-5-5` `low` · `0 tokens` · `$0.0000`']
+        rejects=[base+' · `claude-sonnet-5-5` `medium` · `132,478 tokens` · `$0.43`',
+                 base+' · `claude-sonnet-5-5` `xhigh` · `1 tokens` · `$0.1452`',
+                 base+' · `claude-sonnet-5-5` `medium` · `13,24 tokens` · `$0.1452`',
+                 base+' · `claude-sonnet-5-5 medium` · `132,478 tokens` · `$0.1452`',
+                 base+' · `claude-sonnet-5-5` `medium` · 132,478 tokens · `$0.1452`',
+                 base+' · `claude-sonnet-5-5` `medium` · `132,478 tokens` · $0.1452',
+                 base+' · `claude-sonnet-5-5` `medium` · `12345 tokens` · `$0.1452`']
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'body'
             for signature in accepts+rejects:
                 with self.subTest(signature=signature):
                     path.write_text(signature+'\nNext step: `/cr-received PR #16`\n')
-                    result=subprocess.run(['bash','-c',fragment],env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11','WORKFLOW_IDENTITY':'auto-reviewer.yaml@v0.0.3'},capture_output=True,text=True)
+                    env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11','WORKFLOW_IDENTITY':'auto-reviewer.yaml@v0.0.3'}
+                    result=subprocess.run(['bash','-c',fragment],env=env,capture_output=True,text=True)
                     self.assertEqual(result.returncode==0,signature in accepts,result.stderr)
 
 class ReadinessTest(unittest.TestCase):
@@ -928,7 +949,7 @@ class WorkflowIdentityTest(unittest.TestCase):
                      'GITHUB_OUTPUT':str(output)}
                 result=subprocess.run(['bash','-eo','pipefail','-c',step('Resolve workflow identity')],env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
-                self.assertEqual(output.read_text(),'identity=auto-reviewer.yaml@'+expected+'\n')
+                self.assertEqual(output.read_text(),'identity=auto-reviewer.yaml@'+expected+'\nref='+expected+'\n')
 
     def test_missing_or_unsafe_identity_fails_without_inventing_a_version(self):
         for ref in ['', 'owner/repo/.github/workflows/caller.yaml@refs/tags/v0.0.3',
@@ -943,10 +964,10 @@ class WorkflowIdentityTest(unittest.TestCase):
                 self.assertFalse(output.exists())
 
 class UsageRecordTest(unittest.TestCase):
-    def run_duration(self, execution, model='claude-sonnet-5-5', effort='medium', raw=None, version='0.0.11', elapsed=125):
+    def run_duration(self, execution, model='claude-sonnet-5-5', effort='medium', raw=None, version='0.0.11', elapsed=125, workflow_ref='v0.0.3'):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'.auto-review').mkdir()
-            sig=f'Reviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `cr-request@v{version}` skill'
+            sig=f'Reviewed with: `auto-reviewer.yaml` `{workflow_ref}` workflow · `cr-request` `v{version}` skill'
             (root/'.auto-review/review.md').write_text('<!-- m -->\nbody\n\n'+sig+'\nNext step: `/cr-received PR #1`\n')
             env={**os.environ,'START':'0','SIGNATURE':sig,'SEP':' · ','USAGE_MODEL':model,'USAGE_EFFORT':effort}
             if execution is not None:
@@ -959,18 +980,19 @@ class UsageRecordTest(unittest.TestCase):
     def test_usage_is_appended_to_the_signature(self):
         result={'type':'result','total_cost_usd':0.43215,'usage':{'input_tokens':100,'output_tokens':20,'cache_creation_input_tokens':3,'cache_read_input_tokens':900},'modelUsage':{}}
         line=self.run_duration([{'type':'system'},result])
-        self.assertEqual(line,'Reviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `cr-request@v0.0.11` skill · In 2 min 5 sec · `claude-sonnet-5-5 medium` · 1,023 tokens · $0.4321')
+        self.assertEqual(line,'Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill · In `2 min 5 sec` · `claude-sonnet-5-5` `medium` · `1,023 tokens` · `$0.4321`')
 
     def test_exact_requested_footer_example(self):
-        usage={'type':'result','total_cost_usd':0.1452,'usage':{'input_tokens':132478}}
-        line=self.run_duration([usage], version='0.0.16', elapsed=39)
-        self.assertEqual(line,'Reviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `cr-request@v0.0.16` skill · In 0 min 39 sec · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452')
+        usage={'type':'result','total_cost_usd':0.3138,'usage':{'input_tokens':289723}}
+        line=self.run_duration([usage], version='0.0.16', elapsed=55,
+                               workflow_ref='1a0e98e59aa772bb4c0b77d2dc4d2f9c6110e04e')
+        self.assertEqual(line,'Reviewed with: `auto-reviewer.yaml` `1a0e98e59aa772bb4c0b77d2dc4d2f9c6110e04e` workflow · `cr-request` `v0.0.16` skill · In `0 min 55 sec` · `claude-sonnet-5-5` `medium` · `289,723 tokens` · `$0.3138`')
         workflow=WORKFLOW.read_text()
-        self.assertEqual(workflow.count('Reviewed with: `${{ steps.workflow_identity.outputs.identity }}` workflow · `cr-request@v${{ steps.skill.outputs.version }}` skill'),2)
+        self.assertEqual(workflow.count('Reviewed with: `auto-reviewer.yaml` `${{ steps.workflow_identity.outputs.ref }}` workflow · `cr-request` `v${{ steps.skill.outputs.version }}` skill'),2)
         self.assertIn('Next step: `/verify -> /finalize squash`',workflow)
 
     def test_missing_or_unreadable_usage_leaves_duration_only(self):
-        duration='Reviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `cr-request@v0.0.11` skill · In 2 min 5 sec'
+        duration='Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.11` skill · In `2 min 5 sec`'
         self.assertEqual(self.run_duration(None),duration)
         self.assertEqual(self.run_duration([],raw='not json'),duration)
         self.assertEqual(self.run_duration([{'type':'system'}]),duration)
@@ -1501,6 +1523,19 @@ class SummaryRunTest(unittest.TestCase):
         self.assertIn('| Mean | | | 3.50 sec | | |',body)
         self.assertIn('| Measured | | | 2/3 | 1/3 | 1/3 |',body)
         self.assertIn('| 3 | unknown | unknown | 7 sec | unknown | unknown |',body)
+
+    def test_split_code_footer_and_older_formats_share_summary(self):
+        split='Reviewed with: `auto-reviewer.yaml` `1a0e98e59aa772bb4c0b77d2dc4d2f9c6110e04e` workflow · `cr-request` `v0.0.16` skill · In `0 min 55 sec` · `claude-sonnet-5-5` `medium` · `289,723 tokens` · `$0.3138`'
+        combined='Reviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `cr-request@v0.0.16` skill · In 0 min 39 sec · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452'
+        legacy='Reviewed with: `/cr-request` 0.0.11 skill · In 0 min 20 sec · claude-sonnet-5-5 medium · 1000 tokens · $0.2500'
+        reviews=[self.with_signature({'id':n,'user':{'login':'so-upstars'},'body':''},line)
+                 for n,line in enumerate((split,combined,legacy),101)]
+        state,_=self.run_summary({'reviews':reviews})
+        body=state['comments'][0]['body']
+        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 55 sec | 289,723 | $0.31 |',body)
+        self.assertIn('| **Total** | | | **114 sec** | **423,201** | **$0.71** |',body)
+        self.assertIn('| Mean | | | 38.00 sec | | |',body)
+        self.assertIn('| Measured | | | 3/3 | 3/3 | 3/3 |',body)
 
     def test_summary_is_a_table_with_per_review_usage(self):
         base='Reviewed with: `/cr-request` 0.0.11 skill · In 0 min 20 sec'

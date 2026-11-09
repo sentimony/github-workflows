@@ -63,10 +63,10 @@ patch tag on the merged central commit, push it to origin, confirm it resolves, 
 update callers to that exact tag before merging their changes.
 
 This repository's `.github/workflows/auto-reviewer.yaml`, named `Auto Reviewer`,
-uses the `validate` CI job. During this PR's review phase it calls the released
-`.github/workflows/auto-reviewer.yaml@v0.0.3`. After Ready, it switches to
-`.github/workflows/auto-reviewer-shared.yaml@v0.0.4`; publish that tag before
-expecting the new caller to run. The reusable workflow is named `Auto Reviewer (Shared)`.
+targets `.github/workflows/auto-reviewer-shared.yaml@v0.0.4` with the `validate`
+CI job. The reusable workflow is named `Auto Reviewer (Shared)`. The caller requires
+the published `v0.0.4` tag; the preceding review phase used the released `v0.0.3`
+workflow to review the proposed changes, which does not prove the new engine's runtime.
 Configure Actions secrets in each consumer repository:
 
 1. Create `AUTO_REVIEWER_YNGWALD` and `CLAUDE_CODE_OAUTH_TOKEN`, with separate token

@@ -4,12 +4,12 @@ import subprocess
 import tempfile
 import unittest
 
-from scripts.check_auto_reviewer_contract import load
+from scripts.check_auto_reviewer_shared_contract import load
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECKER = ROOT / 'scripts/check_auto_reviewer_contract.py'
-WORKFLOW = ROOT / '.github/workflows/auto-reviewer.yaml'
-RELEASED = ROOT / 'tests/fixtures/auto-reviewer/v0.0.2-contract.json'
+CHECKER = ROOT / 'scripts/check_auto_reviewer_shared_contract.py'
+WORKFLOW = ROOT / '.github/workflows/auto-reviewer-shared.yaml'
+RELEASED = ROOT / 'tests/fixtures/auto-reviewer-shared/v0.0.2-contract.json'
 CALLER = '''name: Auto Reviewer
 on: [workflow_dispatch]
 permissions:
@@ -46,6 +46,12 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(hashlib.sha256(RELEASED.read_bytes()).hexdigest(),
                          '8c7962c664d5b8c9909b9e8ea6defc82d513fe93762d7cf1a9eb5025c493aac0')
 
+    def test_source_rejects_legacy_pr_number_input(self):
+        caller = CALLER.replace('      required-ci-job:', "      pr_number: '42'\n      required-ci-job:")
+        result = self.check(caller=caller)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unknown caller input', result.stderr)
+
     def test_valid_caller_is_accepted(self):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -71,12 +77,12 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_self_caller_matches_callee_contract(self):
-        path = ROOT / '.github/workflows/self-auto-reviewer.yaml'
+        path = ROOT / '.github/workflows/auto-reviewer.yaml'
         caller = path.read_text()
         result = self.check(caller=caller)
         self.assertEqual(result.returncode, 0, result.stderr)
         workflow = load(str(path))
-        self.assertEqual(workflow['name'], 'Self Auto Reviewer')
+        self.assertEqual(workflow['name'], 'Auto Reviewer')
         self.assertNotIn('concurrency', workflow)
         self.assertEqual(set(workflow['jobs']), {'auto_review'})
         job = workflow['jobs']['auto_review']
@@ -167,7 +173,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(len(examples), 2)
         for example, expected in zip(examples, ('validate', 'check')):
             with self.subTest(expected=expected):
-                self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.3\n', example + '\n')
+                self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.4\n', example + '\n')
                 self.assertIn('AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', example + '\n')
                 result = self.check(caller=example, expected=expected)
                 self.assertEqual(result.returncode, 0, result.stderr)

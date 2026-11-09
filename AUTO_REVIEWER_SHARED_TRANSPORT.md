@@ -1,9 +1,18 @@
-# Auto Reviewer Transport
+# Auto Reviewer (Shared) Transport
 
 This is the shared v1 contract for CI review transport, its durable GitHub ledger,
 and host disposition replies. The trusted host validates
 all reviewer output as data. The schema grants no token, write permission, or approval
 to the read-only reviewer.
+
+The reusable engine is `.github/workflows/auto-reviewer-shared.yaml`, named
+`Auto Reviewer (Shared)`. Fresh review footers identify it with separate code spans:
+`` `auto-reviewer-shared.yaml` `<ref>` workflow ``. History readers also accept the
+released `auto-reviewer.yaml` identity in split or combined spans and older skill-only
+footers. The ledger marker and schema remain unchanged.
+
+Manual workflow dispatch accepts only `pr`. The `pr_number` field below belongs to
+the JSON transport and ledger schema and remains required.
 
 ## Common types and identity
 

@@ -1,11 +1,16 @@
-# Auto Reviewer
+# GitHub Workflows
+
+Reusable GitHub Actions workflows for repositories in the Sentimony organization and
+beyond.
+
+## Auto Reviewer
 
 The reusable workflow posts Claude reviews for eligible pull requests after CI. Its
 `Auto Reviewer` commit status is advisory. The caller workflow name identifies the
 workflow; `required-ci-job` names the CI job checked by the gate. These are separate
 names.
 
-## Contract
+### Contract
 
 1. `required-ci-job` is a required string. It must match `[A-Za-z_][A-Za-z0-9_-]*`.
 2. `pr` and `pr_number` are optional strings with empty defaults for manual dispatch.
@@ -33,7 +38,7 @@ the repository round limit. Invalid or multiple matching labels fail the gate. A
 dispatch or a review request for yngwald bypasses the automatic round count, while
 configuration validation still applies.
 
-## Callers
+### Callers
 
 Squash-merge the central workflow into `main`, then create the `v0.0.1` tag on the
 merged commit, push it to origin, and confirm it resolves before adopting it in either

@@ -40,15 +40,21 @@ configuration validation still applies.
 
 ### Callers
 
-Squash-merge the central workflow into `main`, then create the `v0.0.1` tag on the
-merged commit, push it to origin, and confirm it resolves before adopting it in either
-caller. The examples and caller changes are preparatory until that tag exists; live
-equivalence requires runs against the tagged callee. `workflow_run` uses the caller
-workflow on its default branch.
+Callers use the published `v0.0.1` tag. `workflow_run` uses the caller workflow
+definition on its default branch; pull request events use the PR branch copy.
+`workflow_dispatch` becomes available once the workflow exists on the default branch.
+Live equivalence requires runs against the tagged callee.
 
 Release tags are immutable: never move or recreate one. For later changes, create a new
 patch tag on the merged central commit, push it to origin, confirm it resolves, and
-update both callers to that exact tag before merging their changes.
+update callers to that exact tag before merging their changes.
+
+This repository's `.github/workflows/auto-reviewer-self.yaml` calls the published
+reusable workflow in `.github/workflows/auto-reviewer.yaml` with the `validate` CI job.
+The self-caller maps the required `YNGWALD_PR_TOKEN` input to the organization secret
+`YNGWALD_PR_AUTO_REVIEW_TOKEN` and binds `CLAUDE_CODE_OAUTH_TOKEN` by its own name. Both
+secrets must be available to this repository for live review runs.
+CI runs on branch pushes, pull requests, and manual dispatch. Tag pushes do not trigger it.
 
 The [transport contract](AUTO_REVIEWER_TRANSPORT.md) defines the review draft, ledger,
 and host actions.

@@ -4,6 +4,8 @@ import subprocess
 import tempfile
 import unittest
 
+from check_auto_reviewer_contract import load
+
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / 'scripts/check_auto_reviewer_contract.py'
 WORKFLOW = ROOT / '.github/workflows/auto-reviewer.yaml'
@@ -40,6 +42,29 @@ class ContractTest(unittest.TestCase):
     def test_valid_caller_is_accepted(self):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_self_caller_matches_callee_contract(self):
+        path = ROOT / '.github/workflows/auto-reviewer-self.yaml'
+        caller = path.read_text()
+        result = self.check(caller=caller)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        workflow = load(str(path))
+        self.assertEqual(workflow['name'], 'Auto Reviewer')
+        self.assertNotIn('concurrency', workflow)
+        self.assertEqual(set(workflow['jobs']), {'auto_review'})
+        job = workflow['jobs']['auto_review']
+        self.assertEqual(job['uses'],
+                         'sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.1')
+        self.assertNotIn('concurrency', job)
+        self.assertEqual(job['secrets']['YNGWALD_PR_TOKEN'],
+                         '${{ secrets.YNGWALD_PR_AUTO_REVIEW_TOKEN }}')
+        self.assertEqual(job['secrets']['CLAUDE_CODE_OAUTH_TOKEN'],
+                         '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}')
+
+        ci = load(str(ROOT / '.github/workflows/ci.yml'))
+        events = ci.get('on', ci.get('true'))
+        self.assertEqual(set(events), {'push', 'pull_request', 'workflow_dispatch'})
+        self.assertEqual(events['push'], {'branches': ['**']})
 
     def test_contract_mutations_fail(self):
         original = WORKFLOW.read_text()

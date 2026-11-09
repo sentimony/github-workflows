@@ -20,6 +20,25 @@ ADAPTER = {
 WORKFLOW = ROOT / ADAPTER['workflow']
 
 
+def summary_table(body, first_column):
+    lines=body.splitlines()
+    index=next(i for i,line in enumerate(lines) if line.startswith('| '+first_column+' |'))
+    cells=lambda line: [cell.strip().strip('*') for cell in line.strip('|').split('|')]
+    headers=cells(lines[index]); rows=[]
+    for line in lines[index+2:]:
+        if not line.startswith('|'): break
+        rows.append(dict(zip(headers,cells(line))))
+    return rows
+
+
+def summary_result(body, name):
+    return summary_table(body,'Critical')[0][name]
+
+
+def summary_usage(body, row, column):
+    return next(item[column] for item in summary_table(body,'Review') if item['Review']==row)
+
+
 def step(name):
     ruby = os.environ.get('RUBY', 'ruby')
     script = "require 'yaml'; require 'json'; w=YAML.load_file(ARGV[0], aliases: true); s=w['jobs'].values.flat_map{|j| j['steps'] || []}.find{|x| x['name']==ARGV[1]}; abort 'missing step' unless s; puts JSON.generate(s.fetch('run'))"
@@ -1020,7 +1039,7 @@ class SummaryRefreshTest(unittest.TestCase):
             invoke('refresh_merged_summary'); invoke('merged_summary')
             state=json.loads((root/'state.json').read_text())
             self.assertEqual(len(state['comments']),1)
-            self.assertIn('| Reviews | 1 |',state['comments'][0]['body'])
+            self.assertEqual(sum(row['Review'].isdigit() for row in summary_table(state['comments'][0]['body'],'Review')),1)
 
     def test_unmerged_completion_skips_summary_publication(self):
         job=self.workflow()['jobs']['refresh_merged_summary']
@@ -1413,6 +1432,36 @@ class SummaryRunTest(unittest.TestCase):
     def with_signature(review, line):
         return {**review,'body':review['body']+'\n\n'+line+'\nNext step: none'}
 
+    def test_approved_summary_layout_and_grouped_tokens(self):
+        prefix='Reviewed with: `cr-request@v0.0.16` skill · In '
+        first=self.with_signature(self.review(101,39),prefix+'0 min 39 sec · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452')
+        second=self.with_signature(self.review(102,51),prefix+'0 min 51 sec · `claude-sonnet-5-5 medium` · 212,265 tokens · $0.2264')
+        state,_=self.run_summary({'reviews':[first,second]})
+        body=state['comments'][0]['body']
+        self.assertIn('| Critical | Important | Minor | Fixed | Rejected | Deferred | Undetermined |',body)
+        self.assertNotIn('| Reviews |',body)
+        self.assertNotIn('| Findings |',body)
+        self.assertNotIn('| Duration total |',body)
+        self.assertIn('| Review | Model | Effort | Duration | Tokens | Cost |',body)
+        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 39 sec | 132,478 | $0.15 |',body)
+        self.assertIn('| 2 | claude-sonnet-5-5 | medium | 51 sec | 212,265 | $0.23 |',body)
+        self.assertIn('| **Total** | | | **90 sec** | **344,743** | **$0.37** |',body)
+        self.assertIn('| Mean | | | 45.00 sec | | |',body)
+        self.assertIn('| Measured | | | 2/2 | 2/2 | 2/2 |',body)
+
+    def test_approved_summary_keeps_missing_duration_aligned_with_its_review(self):
+        first=self.review(101,None)
+        second=self.with_signature(self.review(102,0),
+            'Reviewed with: `cr-request@v0.0.16` skill · In 0 min 0 sec · `claude-sonnet-5-5 medium` · 0 tokens · $0.0000')
+        state,_=self.run_summary({'reviews':[first,second,self.review(103,7)]})
+        body=state['comments'][0]['body']
+        self.assertIn('| 1 | unknown | unknown | unknown | unknown | unknown |',body)
+        self.assertIn('| 2 | claude-sonnet-5-5 | medium | 0 sec | 0 | $0.00 |',body)
+        self.assertIn('| **Total** | | | **7 sec** | **0** | **$0.00** |',body)
+        self.assertIn('| Mean | | | 3.50 sec | | |',body)
+        self.assertIn('| Measured | | | 2/3 | 1/3 | 1/3 |',body)
+        self.assertIn('| 3 | unknown | unknown | 7 sec | unknown | unknown |',body)
+
     def test_summary_is_a_table_with_per_review_usage(self):
         base='Reviewed with: `/cr-request` 0.0.11 skill · In 0 min 20 sec'
         first=self.with_signature(self.review(101),base+' · claude-sonnet-5-5 medium · 1000 tokens · $0.2500')
@@ -1420,14 +1469,15 @@ class SummaryRunTest(unittest.TestCase):
         old=self.with_signature(self.review(103),base)
         state,_=self.run_summary({'reviews':[first,second,old]})
         body=state['comments'][0]['body']
-        self.assertIn('| Metric | Value |\n| --- | --- |\n| Reviews | 3 |\n| Findings | 3 + unknown |',body)
-        for row in ('| Critical | 0 + unknown |','| Important | 3 + unknown |','| Minor | 0 + unknown |','| Duration measured | 3/3 |','| Duration mean | 20.00 sec |'):
-            self.assertIn(row,body)
-        self.assertIn('| Review | Model | Effort | Tokens | Cost |\n| --- | --- | --- | --- | --- |',body)
-        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 1000 | $0.25 |',body)
-        self.assertIn('| 2 | claude-opus-5-5 | high | 2500 | $1.00 |',body)
-        self.assertIn('| 3 | unknown | unknown | unknown | unknown |',body)
-        self.assertIn('| Total (measured 2/3) | | | 3500 | $1.25 |',body)
+        self.assertEqual(summary_result(body,'Critical'),'0 + unknown')
+        self.assertEqual(summary_result(body,'Important'),'3 + unknown')
+        self.assertEqual(summary_result(body,'Minor'),'0 + unknown')
+        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 20 sec | 1,000 | $0.25 |',body)
+        self.assertIn('| 2 | claude-opus-5-5 | high | 20 sec | 2,500 | $1.00 |',body)
+        self.assertIn('| 3 | unknown | unknown | 20 sec | unknown | unknown |',body)
+        self.assertIn('| **Total** | | | **60 sec** | **3,500** | **$1.25** |',body)
+        self.assertIn('| Mean | | | 20.00 sec | | |',body)
+        self.assertIn('| Measured | | | 3/3 | 2/3 | 2/3 |',body)
 
     def test_summary_reads_new_footer_and_legacy_usage_together(self):
         modern='Reviewed with: `cr-request@v0.0.16` skill · In 0 min 39 sec · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452'
@@ -1436,15 +1486,15 @@ class SummaryRunTest(unittest.TestCase):
         second=self.with_signature(self.review(102), legacy)
         state,_=self.run_summary({'reviews':[first,second]})
         body=state['comments'][0]['body']
-        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 132478 | $0.15 |',body)
-        self.assertIn('| Total (measured 2/2) | | | 133478 | $0.40 |',body)
-        self.assertIn('| Duration total | 59 sec |',body)
+        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 39 sec | 132,478 | $0.15 |',body)
+        self.assertIn('| **Total** | | | **59 sec** | **133,478** | **$0.40** |',body)
+        self.assertEqual(summary_usage(body,'Total','Duration'),'59 sec')
 
     def test_summary_without_recorded_usage_is_unknown(self):
         state,_=self.run_summary({'reviews':[self.review()]})
         body=state['comments'][0]['body']
-        self.assertIn('| 1 | unknown | unknown | unknown | unknown |',body)
-        self.assertIn('| Total (measured 0/1) | | | unknown | unknown |',body)
+        self.assertIn('| 1 | unknown | unknown | 20 sec | unknown | unknown |',body)
+        self.assertIn('| **Total** | | | **20 sec** | **unknown** | **unknown** |',body)
 
     def test_no_reviews_and_legacy_duration(self):
         state,trace=self.run_summary({'reviews':[]})
@@ -1453,8 +1503,9 @@ class SummaryRunTest(unittest.TestCase):
         state,trace=self.run_summary({'reviews':[review]},repeat=True)
         self.assertEqual(len(state['comments']),1)
         body=state['comments'][0]['body']
-        self.assertIn('| Findings | 0 + unknown |',body)
-        self.assertIn('| Duration total | 63 sec |',body)
+        for severity in ('Critical','Important','Minor'):
+            self.assertEqual(summary_result(body,severity),'0 + unknown')
+        self.assertEqual(summary_usage(body,'Total','Duration'),'63 sec')
         self.assertEqual(sum(x['method']=='POST' and '/issues/42/comments' in x['endpoint'] for x in trace),1)
 
     def test_forged_marker_and_last_host_reply(self):
@@ -1465,14 +1516,14 @@ class SummaryRunTest(unittest.TestCase):
         fake={'id':88,'user':{'login':'mallory'},'body':'<!-- claude-review summary -->'}
         state,_=self.run_summary({'reviews':[review], 'threads':[thread], 'comments':[fake]},repeat=True)
         self.assertEqual(len(state['comments']),2)
-        self.assertIn('| Rejected | 1 |',state['comments'][1]['body'])
-        self.assertIn('| Duration mean | 20.00 sec |',state['comments'][1]['body'])
+        self.assertEqual(summary_result(state['comments'][1]['body'],'Rejected'),'1')
+        self.assertEqual(summary_usage(state['comments'][1]['body'],'Mean','Duration'),'20.00 sec')
 
     def test_paginated_reviews_and_unknown_duration(self):
         reviews=[{'id':n,'user':{'login':'so-upstars'},'body':'legacy'} for n in range(1,102)]
         state,trace=self.run_summary({'reviews':reviews})
-        self.assertIn('| Reviews | 101 |',state['comments'][0]['body'])
-        self.assertIn('| Duration total | unknown |',state['comments'][0]['body'])
+        self.assertEqual(sum(row['Review'].isdigit() for row in summary_table(state['comments'][0]['body'],'Review')),101)
+        self.assertEqual(summary_usage(state['comments'][0]['body'],'Total','Duration'),'unknown')
         self.assertTrue(any('page=2' in x['endpoint'] for x in trace))
 
     def test_malformed_ledger_is_unknown_not_zero(self):
@@ -1480,9 +1531,10 @@ class SummaryRunTest(unittest.TestCase):
         review['body']=review['body'].replace('"envelope_version": 1','"envelope_version": true')
         state,_=self.run_summary({'reviews':[review]})
         body=state['comments'][0]['body']
-        self.assertIn('| Findings | 0 + unknown |',body)
-        self.assertIn('| Rejected | 0 + unknown |',body)
-        self.assertIn('| Duration measured | 0/1 |',body)
+        for severity in ('Critical','Important','Minor'):
+            self.assertEqual(summary_result(body,severity),'0 + unknown')
+        self.assertEqual(summary_result(body,'Rejected'),'0 + unknown')
+        self.assertEqual(summary_usage(body,'Measured','Duration'),'0/1')
 
     def test_later_explicit_disposition_wins(self):
         review=self.review()
@@ -1491,7 +1543,7 @@ class SummaryRunTest(unittest.TestCase):
         def c(i,body,stamp,author='alice',review=None): return {'databaseId':i,'author':{'login':author},'authorAssociation':'MEMBER','body':body,'updatedAt':stamp,'pullRequestReview':review}
         thread={'id':'t','path':'a.py','isResolved':False,'comments':[c(1,'**Important** R1-F1 - finding','2026-10-30T00:00:00Z','so-upstars',{'databaseId':101}),c(2,marker('REJECT'),'2026-10-30T00:00:01Z'),c(3,marker('ACCEPT'),'2026-10-30T00:00:02Z')]}
         state,_=self.run_summary({'reviews':[review],'threads':[thread]})
-        self.assertIn('| Rejected | 0 |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'0')
 
     def test_declined_defer_does_not_erase_reject_or_duplicate_finding(self):
         origin=self.review()
@@ -1505,12 +1557,12 @@ class SummaryRunTest(unittest.TestCase):
         thread={'id':'t','path':'a.py','isResolved':False,'comments':[c(1,'so-upstars','**Important** R1-F1 - finding',{'databaseId':101}),c(2,'alice','<!-- cr-received-disposition:v1 '+json.dumps(marker)+' -->',None)]}
         state,_=self.run_summary({'reviews':[origin,carry],'threads':[thread]})
         body=state['comments'][0]['body']
-        self.assertIn('| Findings | 1 |\n',body)
-        self.assertIn('| Important | 1 |\n',body)
-        self.assertIn('| Undetermined | 0 |\n',body)
-        self.assertIn('| Rejected | 1 |\n',body)
-        self.assertIn('| Duration total | 60 sec |',body)
-        self.assertIn('| Duration mean | 30.00 sec |',body)
+        self.assertEqual(sum(int(summary_result(body,k).split()[0]) for k in ('Critical','Important','Minor')),1)
+        self.assertEqual(summary_result(body,'Important'),'1')
+        self.assertEqual(summary_result(body,'Undetermined'),'0')
+        self.assertEqual(summary_result(body,'Rejected'),'1')
+        self.assertEqual(summary_usage(body,'Total','Duration'),'60 sec')
+        self.assertEqual(summary_usage(body,'Mean','Duration'),'30.00 sec')
 
     def defer_fixture(self):
         origin=self.review()
@@ -1534,10 +1586,10 @@ class SummaryRunTest(unittest.TestCase):
         data=self.defer_fixture()
         thread=data['threads'][0]
         state,_=self.run_summary(data)
-        self.assertIn('| Deferred | 1 |\n',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'1')
         thread['isResolved']=False
         state,_=self.run_summary(data)
-        self.assertIn('| Deferred | 0 + unknown |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'0 + unknown')
 
     def test_acceptance_reason_can_differ_from_proposal(self):
         data=self.defer_fixture()
@@ -1547,13 +1599,13 @@ class SummaryRunTest(unittest.TestCase):
         carry['body']='<!-- claude-review-ledger:v1 '+json.dumps(d)+' -->'
         data['issue']['body']=data['issue']['body'].replace('alice Later','alice Reviewer confirms later work')
         state,_=self.run_summary(data)
-        self.assertIn('| Deferred | 1 |\n',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'1')
 
     def test_closed_deferred_issue_is_incomplete(self):
         data=self.defer_fixture()
         data['issue']['state']='closed'
         state,_=self.run_summary(data)
-        self.assertIn('| Deferred | 0 + unknown |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'0 + unknown')
 
     def test_latest_defer_decision_controls_completion(self):
         for decision in ('DECLINED','NONE'):
@@ -1568,8 +1620,8 @@ class SummaryRunTest(unittest.TestCase):
                     data['reviews'].append(later)
                     if reverse: data['reviews'].reverse()
                     state,_=self.run_summary(data)
-                    self.assertIn('| Deferred | 0 + unknown |',state['comments'][0]['body'])
-                    self.assertIn('| Rejected | 0 + unknown |',state['comments'][0]['body'])
+                    self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'0 + unknown')
+                    self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'0 + unknown')
 
     def test_new_host_defer_requires_fresh_matching_acceptance(self):
         for change in ('head','reason'):
@@ -1580,7 +1632,7 @@ class SummaryRunTest(unittest.TestCase):
             marker.update(updatedAt='2026-10-30T00:00:04Z',body='<!-- cr-received-disposition:v1 '+json.dumps(payload)+' -->')
             data['head_sha']='c'*40
             state,_=self.run_summary(data)
-            self.assertIn('| Deferred | 0 + unknown |',state['comments'][0]['body'])
+            self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'0 + unknown')
 
     def test_same_timestamp_defer_edits_require_matching_source_evidence(self):
         for change in ('reason','comment_id','author'):
@@ -1593,7 +1645,7 @@ class SummaryRunTest(unittest.TestCase):
                 elif change=='comment_id': marker['databaseId']=4
                 else: marker['author']={'login':'bob'}
                 state,_=self.run_summary(data)
-                self.assertIn('| Deferred | 0 + unknown |',state['comments'][0]['body'])
+                self.assertEqual(summary_result(state['comments'][0]['body'],'Deferred'),'0 + unknown')
 
     def test_thread_and_reply_pagination(self):
         review=self.review()
@@ -1603,7 +1655,7 @@ class SummaryRunTest(unittest.TestCase):
         threads=[{'id':'other'+str(i),'path':'other','isResolved':False,'comments':[]} for i in range(100)]
         threads.append({'id':'target','path':'a.py','isResolved':False,'comments':comments})
         state,trace=self.run_summary({'reviews':[review],'threads':threads})
-        self.assertIn('| Rejected | 1 |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'1')
         self.assertGreaterEqual(sum(x['endpoint']=='graphql' for x in trace),3)
 
     def test_unmerged_rejected_before_write_and_existing_comment_updated(self):
@@ -1619,7 +1671,7 @@ class SummaryRunTest(unittest.TestCase):
         existing={'id':7,'user':{'login':'so-upstars'},'body':'<!-- claude-review summary -->\nold'}
         state,trace=self.run_summary({'reviews':[self.review()],'comments':[existing]})
         self.assertEqual(len(state['comments']),1)
-        self.assertIn('| Duration total | 20 sec |',state['comments'][0]['body'])
+        self.assertEqual(summary_usage(state['comments'][0]['body'],'Total','Duration'),'20 sec')
         self.assertEqual(sum(x['method']=='PATCH' for x in trace),1)
 
     def test_untrusted_host_marker_cannot_prove_rejection(self):
@@ -1628,7 +1680,7 @@ class SummaryRunTest(unittest.TestCase):
         def c(i,author,body,association,review=None): return {'databaseId':i,'author':{'login':author},'authorAssociation':association,'body':body,'updatedAt':'2026-10-30T00:00:00Z','pullRequestReview':review}
         thread={'id':'t','path':'a.py','isResolved':False,'comments':[c(1,'so-upstars','**Important** R1-F1 - finding','MEMBER',{'databaseId':101}),c(2,'mallory','<!-- cr-received-disposition:v1 '+json.dumps(marker)+' -->','NONE')]}
         state,_=self.run_summary({'reviews':[review],'threads':[thread]})
-        self.assertIn('| Rejected | 0 + unknown |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'0 + unknown')
 
     def timeline_fixture(self, statuses, disposition=None, marker_head='a'*40):
         origin=self.review()
@@ -1648,23 +1700,22 @@ class SummaryRunTest(unittest.TestCase):
 
     def test_host_accept_then_later_addressed_is_fixed(self):
         state,_=self.run_summary(self.timeline_fixture(['ADDRESSED'],'ACCEPT'))
-        self.assertIn('| Fixed | 1 |\n',state['comments'][0]['body'])
-        self.assertIn('| Undetermined | 0 |\n',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Fixed'),'1')
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Undetermined'),'0')
 
     def test_addressed_without_marker_is_known_fixed(self):
         state,_=self.run_summary(self.timeline_fixture(['ADDRESSED']))
-        self.assertIn('| Fixed | 1 |\n',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Fixed'),'1')
 
     def test_later_not_addressed_resets_fixed_but_not_reject(self):
         state,_=self.run_summary(self.timeline_fixture(['ADDRESSED','NOT_ADDRESSED']))
-        self.assertIn('| Fixed | 0 + unknown |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Fixed'),'0 + unknown')
         state,_=self.run_summary(self.timeline_fixture(['NOT_ADDRESSED'],'REJECT'))
-        self.assertIn('| Rejected | 1 |\n',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'1')
 
     def test_unrelated_head_cannot_supply_reject(self):
         state,_=self.run_summary(self.timeline_fixture(['ADDRESSED'],'REJECT','f'*40))
-        self.assertNotIn('| Rejected | 1 |',state['comments'][0]['body'])
-        self.assertIn('| Rejected | 0 + unknown |',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'0 + unknown')
 
     def test_host_disposition_equal_timestamp_uses_comment_id(self):
         fixture=self.timeline_fixture([],'REJECT')
@@ -1673,7 +1724,7 @@ class SummaryRunTest(unittest.TestCase):
         later={**original,'databaseId':3,'body':'<!-- cr-received-disposition:v1 '+json.dumps(marker)+' -->'}
         fixture['threads'][0]['comments']=[fixture['threads'][0]['comments'][0],later,original]
         state,_=self.run_summary(fixture)
-        self.assertIn('| Rejected | 0 |\n',state['comments'][0]['body'])
+        self.assertEqual(summary_result(state['comments'][0]['body'],'Rejected'),'0')
 
 
 

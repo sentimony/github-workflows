@@ -268,9 +268,10 @@ jobs:
                   Path('summary.txt').unlink(missing_ok=True)
                   sys.exit(0)
               all_threads=threads()
-              valid=[]; unknown=False; durations=[]; usages=[]
+              valid=[]; unknown=False; review_durations=[]; usages=[]
               usage_re=re.compile(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` [^\n]+) skill · In [0-9]+ min [0-9]+ sec(?: · `?([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)`? · ([0-9]+(?:,[0-9]{3})*) tokens · \$([0-9]+\.[0-9]{4}))?$',re.M)
               for r in reviews:
+                  review_durations.append(None)
                   found_usage=usage_re.findall(r.get('body') or '')
                   found_usage=[(m,e,n.replace(',',''),c) for m,e,n,c in found_usage]
                   usages.append(found_usage[0] if len(found_usage)==1 and found_usage[0][0] else None)
@@ -280,11 +281,12 @@ jobs:
                       d=loads(raw[0])
                       require(valid_envelope(d) and d['repository']==repo and d['pr_number']==number and d['published_review_id']==r.get('id') and d['head_sha']==r.get('commit_id'),'ledger identity')
                       valid.append((r,d))
-                      if d['duration_seconds'] is not None: durations.append(d['duration_seconds'])
+                      review_durations[-1]=d['duration_seconds']
                   except (Stop, ValueError, KeyError, TypeError):
                       unknown=True
                       signature=re.findall(r'^Reviewed with: (?:`cr-request@v[0-9.]+`|`/cr-request` [^\n]+) skill · In ([0-9]+) min ([0-9]+) sec(?: · .*)?$',r.get('body') or '',re.M)
-                      if len(signature)==1 and int(signature[0][1])<60: durations.append(int(signature[0][0])*60+int(signature[0][1]))
+                      if len(signature)==1 and int(signature[0][1])<60: review_durations[-1]=int(signature[0][0])*60+int(signature[0][1])
+              durations=[d for d in review_durations if d is not None]
               origins={}
               for r,d in valid:
                   for f in d['findings']:
@@ -366,20 +368,30 @@ jobs:
               show=lambda n: str(n) + (' + unknown' if gap else '')
               unk=' + unknown' if history_gap else ''
               count_of=lambda severity: sum(f['severity']==severity for f in origins.values())
-              rows=[('Reviews',str(len(reviews))),('Findings',str(len(origins))+unk)]
-              rows+=[(severity,str(count_of(severity))+unk) for severity in ('Critical','Important','Minor')]
-              rows+=[('Fixed',show(counts['fixed'])),('Rejected',show(counts['REJECT'])),('Deferred',show(counts['deferred'])),
-                  ('Undetermined',show(sum(v not in ('fixed','REJECT','deferred') for v in states.values()))),
-                  ('Duration measured',f'{len(durations)}/{len(reviews)}'),
-                  ('Duration total',str(sum(durations))+' sec' if durations else 'unknown'),
-                  ('Duration mean',f'{sum(durations)/len(durations):.2f} sec' if durations else 'unknown')]
-              lines=['<!-- claude-review summary -->','## Review cycle summary','','| Metric | Value |','| --- | --- |']+[f'| {k} | {v} |' for k,v in rows]
-              # Rows show 2 decimals while the total sums the exact values: an accepted cent drift
+              headers=['Critical','Important','Minor','Fixed','Rejected','Deferred','Undetermined']
+              values=[str(count_of(severity))+unk for severity in headers[:3]]
+              values += [show(counts['fixed']),show(counts['REJECT']),show(counts['deferred']),
+                  show(sum(v not in ('fixed','REJECT','deferred') for v in states.values()))]
+              lines=['<!-- claude-review summary -->','## Review cycle summary','',
+                  '| '+' | '.join(headers)+' |','| '+' | '.join(['---']*len(headers))+' |',
+                  '| '+' | '.join(values)+' |']
+              # Rows show 2 decimals while the total sums the exact values: an accepted cent drift.
               measured=[u for u in usages if u]
-              lines+=['','### Review usage','','| Review | Model | Effort | Tokens | Cost |','| --- | --- | --- | --- | --- |']
-              for n,u in enumerate(usages,1):
-                  lines.append(f'| {n} | {u[0]} | {u[1]} | {u[2]} | ${float(u[3]):.2f} |' if u else f'| {n} | unknown | unknown | unknown | unknown |')
-              lines.append(f'| Total (measured {len(measured)}/{len(usages)}) | | | '+(f'{sum(int(u[2]) for u in measured)} | ${sum(float(u[3]) for u in measured):.2f} |' if measured else 'unknown | unknown |'))
+              lines+=['','### Review usage','',
+                  '| Review | Model | Effort | Duration | Tokens | Cost |',
+                  '| --- | --- | --- | --- | --- | --- |']
+              for n,(u,duration) in enumerate(zip(usages,review_durations),1):
+                  elapsed=str(duration)+' sec' if duration is not None else 'unknown'
+                  usage=[u[0],u[1],elapsed,f'{int(u[2]):,}',f'${float(u[3]):.2f}'] if u else [
+                      'unknown','unknown',elapsed,'unknown','unknown']
+                  lines.append('| '+str(n)+' | '+' | '.join(usage)+' |')
+              total_duration=str(sum(durations))+' sec' if durations else 'unknown'
+              total_tokens=f'{sum(int(u[2]) for u in measured):,}' if measured else 'unknown'
+              total_cost=f'${sum(float(u[3]) for u in measured):.2f}' if measured else 'unknown'
+              lines.append(f'| **Total** | | | **{total_duration}** | **{total_tokens}** | **{total_cost}** |')
+              mean=f'{sum(durations)/len(durations):.2f} sec' if durations else 'unknown'
+              lines.append(f'| Mean | | | {mean} | | |')
+              lines.append(f'| Measured | | | {len(durations)}/{len(reviews)} | {len(measured)}/{len(reviews)} | {len(measured)}/{len(reviews)} |')
               Path('summary.txt').write_text('\n'.join(lines)+'\n',encoding='utf-8')
           except (Stop, ValueError, KeyError, TypeError, OSError):
               print('::error::Merged summary gathering failed', file=sys.stderr)

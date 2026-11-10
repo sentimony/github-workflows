@@ -3,7 +3,7 @@
 One release tag covers every workflow in this repository. Each release lists its changes
 per workflow, newest first.
 
-## v0.0.5
+## v0.0.5 - 2026-11-10
 
 ### auto-reviewer-shared
 

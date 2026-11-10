@@ -18,6 +18,7 @@ ADAPTER = {
     'skippable_jobs': [],
 }
 WORKFLOW = ROOT / ADAPTER['workflow']
+HELPERS_DIR = tempfile.TemporaryDirectory()
 
 
 def summary_table(body, first_column):
@@ -43,6 +44,11 @@ def step(name):
     ruby = os.environ.get('RUBY', 'ruby')
     script = "require 'yaml'; require 'json'; w=YAML.load_file(ARGV[0], aliases: true); s=w['jobs'].values.flat_map{|j| j['steps'] || []}.find{|x| x['name']==ARGV[1]}; abort 'missing step' unless s; puts JSON.generate(s.fetch('run'))"
     source = json.loads(subprocess.check_output([ruby, '-e', script, str(WORKFLOW), name], text=True))
+    if 'from auto_reviewer_lib import' in source:
+        # The job writes the shared helpers in an earlier step; run that step first.
+        source = json.loads(subprocess.check_output([ruby, '-e', script, str(WORKFLOW), 'Write review helpers'], text=True)) + source
+    if 'auto_reviewer_lib' in source:
+        source = f': "${{RUNNER_TEMP:={HELPERS_DIR.name}}}"\nexport RUNNER_TEMP\n' + source
     return source.replace(ADAPTER['reviewer'], 'so-upstars')
 
 
@@ -182,6 +188,21 @@ class ResolverBoundaryTest(unittest.TestCase):
         # Both jobs report a failure that left the status pending the same way.
         self.assertEqual(step('Finalize failed publication'),step('Report an unexpected failure'))
         self.assertIn('Publishing the review failed',step('Report an unexpected failure'))
+
+    def test_helper_users_write_the_helpers_first(self):
+        ruby=os.environ.get('RUBY','ruby')
+        jobs=json.loads(subprocess.check_output([ruby,'-e',"require 'yaml'; require 'json'; puts JSON.generate(YAML.load_file(ARGV[0], aliases: true))",str(WORKFLOW)],text=True))['jobs']
+        users=set()
+        for name,job in jobs.items():
+            steps=job.get('steps',[])
+            importing=[i for i,s in enumerate(steps) if 'from auto_reviewer_lib import' in s.get('run','')]
+            if not importing: continue
+            users.add(name)
+            writers=[i for i,s in enumerate(steps) if s.get('name')=='Write review helpers']
+            self.assertEqual(len(writers),1,name)
+            self.assertLess(writers[0],importing[0],name)
+        self.assertEqual(users,{'merged_summary','publish','complete','refresh_merged_summary'})
+        self.assertNotIn('auto_reviewer_lib',json.dumps(jobs['resolve_threads']))
 
 
 class PrepareThreadsTest(unittest.TestCase):

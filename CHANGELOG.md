@@ -10,13 +10,17 @@ per workflow, newest first.
 1. The review actions script is defined once: `Complete review actions` reuses the
    `Publish review actions` script through a YAML anchor, and `PHASE` still selects
    PREPARE or COMPLETE behavior. The workflow shrinks by 468 lines.
-2. The ledger lists repository issues once per run instead of once per accepted deferred
+2. The helpers shared by the merged summary and the review actions scripts (API access,
+   ledger validation, thread lookup and disposition markers) are defined once: a
+   `Write review helpers` step writes them as a module to `$RUNNER_TEMP`, and both scripts
+   import it and call `configure()`.
+3. The ledger lists repository issues once per run instead of once per accepted deferred
    finding.
-3. `Validate review body` parses the Summary table and readiness once, in the renderer,
+4. `Validate review body` parses the Summary table and readiness once, in the renderer,
    with the same strict row grammar. The inline comments and review actions JSON are
    checked for token-like strings only after decoding, and invalid JSON now sets a failure
    status.
-4. Smaller cleanups: one failure reporter shared by the publish and complete jobs, no
+5. Smaller cleanups: one failure reporter shared by the publish and complete jobs, no
    duplicate `is_positive`/`nonempty` helpers or nested `datetime` import, and one
    `Reviewed with:` prefix pattern in the merged summary.
 

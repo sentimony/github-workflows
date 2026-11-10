@@ -336,6 +336,13 @@ class LedgerTest(unittest.TestCase):
                     self.assertEqual(json.loads(marker)['duration_seconds'],63)
                     self.assertLess(body.index('<!-- claude-review-ledger:v1 '),body.index(signature))
 
+    def test_used_footer_preserves_ledger_duration_and_footer_position(self):
+        result,trace,body=self.run_ledger(signature=USED_EXAMPLE)
+        self.assertEqual(result.returncode,0,result.stderr)
+        marker=body.split('<!-- claude-review-ledger:v1 ',1)[1].split(' -->',1)[0]
+        self.assertEqual(json.loads(marker)['duration_seconds'],49)
+        self.assertLess(body.index('<!-- claude-review-ledger:v1 '),body.index(USED_EXAMPLE))
+
     def test_canonical_nulls_and_put_readback(self):
         result,trace,body=self.run_ledger()
         self.assertEqual(result.returncode,0,result.stderr)
@@ -607,6 +614,21 @@ class ResolverRunTest(unittest.TestCase):
 
     def run_step(self,name,**extra):
         return subprocess.run(['bash','-eo','pipefail','-c',step(name)],env={**self.env,**extra},capture_output=True,text=True)
+
+    def test_completion_updates_public_readiness_without_reintroducing_next_step(self):
+        self.reset(addressed=True)
+        table='| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | 0 | 0 | 0 |'
+        (self.root/'post.md').write_text('Readiness: **Ready with fixes**\n\n'+table+'\n\n<details><summary>Details</summary>\n\nEvidence\n\n</details>\n\n'+USED_EXAMPLE+'\n')
+        result=self.run_step('Publish review actions',GH_TOKEN='fixture-publisher',PHASE='PREPARE',STAGE='prepare')
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.request=json.loads(next(x.split('=',1)[1] for x in (self.root/'output').read_text().splitlines() if x.startswith('requests=')))
+        self.assertEqual(self.resolve().returncode,0)
+        completed=self.complete()
+        self.assertEqual(completed.returncode,0,completed.stderr)
+        body=self.state()['body']
+        self.assertTrue(body.startswith('Readiness: **Ready**\n'))
+        self.assertNotIn('Next step:',body)
+        self.assertIn(USED_EXAMPLE,body)
 
     def prepare(self,addressed=False):
         self.reset(addressed)
@@ -929,6 +951,104 @@ class PublicationFailureTest(unittest.TestCase):
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertEqual((root/'trace').exists(),expected)
                 if expected: self.assertIn('state=error',(root/'trace').read_text())
+
+
+USED_EXAMPLE = 'Used: `cr-request` <sup>[0.0.16](https://www.skills.sh/sentimony/agentic-workflow/cr-request)</sup> · `auto-reviewer-shared` <sup>[0.0.4](https://github.com/sentimony/github-workflows)</sup> · `claude-sonnet-5-5 medium` · `0 min 49 sec` · `202,629 tokens` · `$0.1634`'
+
+
+class PublicPresentationTest(unittest.TestCase):
+    def render(self, readiness='Ready', ref='v0.0.4', usage=True, reversed_footer=False, details='<details open><summary>Details</summary>', full=False, evidence='Full evidence.', extra_before='', extra_after=''):
+        signature=f'Reviewed with: `auto-reviewer-shared.yaml` `{ref}` workflow · `cr-request` `v0.0.16` skill · In `0 min 49 sec`'
+        if usage:
+            signature+=' · `claude-sonnet-5-5` `medium` · `202,629 tokens` · `$0.1634`'
+        footer=[signature,'Next step: `/verify -> /finalize squash`']
+        if reversed_footer: footer.reverse()
+        marker='<!-- claude-review sha='+('a'*40)+' -->'
+        table='| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | 0 | 0 | 0 |'
+        body=marker+'\n\n'+extra_before+table+'\n\n**Readiness:** '+readiness+'\n\n'+details+'\n\n'+evidence+'\n\n</details>\n\n'+extra_after+'\n'.join(footer)+'\n'
+        script=step('Validate review body')
+        fragment=script[script.index('# The Next step line loses'):script.index('# GitHub rejects review bodies over')]
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'draft').write_text(body)
+            env={**os.environ,'BODY_FILE':str(root/'draft'),'POST_FILE':str(root/'post'),'SIGNATURE':signature,'INTERNAL_SIGNATURE':signature,
+                 'LAST_LINE':footer[-1]}
+            if full:
+                fake=root/'gh'
+                fake.write_text('#!/bin/sh\ncase "$2" in\n  */status[?]*) echo run-url ;;\n  */pulls/42) echo '+('a'*40)+' ;;\n  *) exit 2 ;;\nesac\n')
+                fake.chmod(0o755)
+                env.update(PATH=str(root)+os.pathsep+os.environ['PATH'],REPO='owner/repo',NUMBER='42',HEAD_SHA='a'*40,
+                           RUN_URL='run-url',CONTEXT='Auto Reviewer',MARKER=marker,JOB_STATUS='success',REVIEW_RESULT='success',VERSION='0.0.16',
+                           WORKFLOW_IDENTITY='auto-reviewer-shared.yaml@'+ref,COMMENTS_FILE=str(root/'comments'),
+                           ACTIONS_FILE=str(root/'actions'),GITHUB_OUTPUT=str(root/'output'))
+                command=script
+            else:
+                command='signature="$INTERNAL_SIGNATURE"; last="$LAST_LINE"\n'+fragment
+            result=subprocess.run(['bash','-eo','pipefail','-c',command],env=env,capture_output=True,text=True)
+            result.outputs=(root/'output').read_text() if (root/'output').exists() else ''
+            return result,(root/'post').read_text() if (root/'post').exists() else '',marker,table
+
+    def test_exact_requested_published_layout(self):
+        result,body,marker,table=self.render()
+        self.assertEqual(result.returncode,0,result.stderr)
+        expected=marker+'\n\nReadiness: **Ready**\n\n'+table+'\n\n<details><summary>Details</summary>\n\nFull evidence.\n\n</details>\n\n'+USED_EXAMPLE+'\n'
+        self.assertEqual(body,expected)
+        self.assertNotIn('Next step:',body)
+        self.assertNotIn('Reviewed with:',body)
+
+    def test_whole_validator_exports_the_actual_public_signature(self):
+        result,body,marker,table=self.render(full=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('ready_to_post=true\n',result.outputs)
+        self.assertIn('signature='+USED_EXAMPLE+'\n',result.outputs)
+        self.assertIn('summary=Critical 0, Important 0, Minor 0; Ready\n',result.outputs)
+        self.assertTrue(body.startswith(marker+'\n\nReadiness: **Ready**\n'))
+
+    def test_nested_details_are_rejected_before_publication(self):
+        result,body,_,_=self.render(details='<details><summary>Details</summary>\n<details><summary>Other</summary>')
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(body,'')
+
+    def test_details_tags_quoted_as_code_remain_publishable_and_intact(self):
+        cases=('Quoted `<details>` and `</details>` tags.',
+               '```html\n<details>\n</details>\n```',
+               '~~~html\n<details open>\n</details>\n~~~',
+               '    <details>\n    </details>',
+               '``literal\n<details>\n</details>\n``',
+               'Use `` `<details>` `` in code.',
+               'Hidden comment: <!-- <details> </details> --> remains intact.')
+        for evidence in cases:
+            with self.subTest(evidence=evidence):
+                result,body,_,_=self.render(evidence=evidence)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn('\n\n'+evidence+'\n\n</details>',body)
+                self.assertTrue(body.rstrip().endswith(USED_EXAMPLE))
+
+    def test_evidence_outside_details_fails_instead_of_silently_disappearing(self):
+        for side in ('extra_before','extra_after'):
+            with self.subTest(side=side):
+                result,body,_,_=self.render(**{side:'Additional material evidence.\n\n'})
+                self.assertNotEqual(result.returncode,0)
+                self.assertEqual(body,'')
+                self.assertIn('outside Details',result.stderr)
+
+    def test_other_readiness_values_and_legacy_footer_order(self):
+        for readiness in ('Ready with fixes','Not ready'):
+            with self.subTest(readiness=readiness):
+                result,body,_,_=self.render(readiness=readiness,reversed_footer=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn('Readiness: **'+readiness+'**',body)
+                self.assertNotIn('Next step:',body)
+                self.assertTrue(body.rstrip().endswith(USED_EXAMPLE))
+
+    def test_unknown_usage_and_nonversion_refs_remain_honest(self):
+        for ref in ('a'*40, 'v2.preview', 'feature/review'):
+            with self.subTest(ref=ref):
+                result,body,_,_=self.render(ref=ref,usage=False)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn('<sup>['+ref+'](https://github.com/sentimony/github-workflows)</sup>',body)
+                self.assertTrue(body.rstrip().endswith(' · `0 min 49 sec`'))
+                self.assertNotIn('tokens',body)
+                self.assertNotIn('Next step:',body)
 
 
 class FooterTest(unittest.TestCase):
@@ -1655,6 +1775,24 @@ class SummaryRunTest(unittest.TestCase):
         state,_=self.run_summary({'reviews':reviews})
         body=state['comments'][0]['body']
         self.assertIn('| **Total** | | | **110 sec** | **579,446** | **$0.63** |',body)
+        self.assertIn('| Measured | | | 2/2 | 2/2 | 2/2 |',body)
+
+    def test_used_duration_without_usage_keeps_zero_distinct_from_unknown(self):
+        line=USED_EXAMPLE.split(' · `claude-sonnet-5-5 medium`',1)[0]+' · `0 min 0 sec`'
+        review=self.with_signature({'id':101,'user':{'login':'so-upstars'},'body':''},line)
+        state,_=self.run_summary({'reviews':[review]})
+        body=state['comments'][0]['body']
+        self.assertIn('| 1 | unknown | unknown | 0 sec | unknown | unknown |',body)
+        self.assertIn('| Measured | | | 1/1 | 0/1 | 0/1 |',body)
+
+    def test_used_footer_and_legacy_footer_share_summary_usage(self):
+        legacy='Reviewed with: `cr-request@v0.0.16` skill · In 0 min 0 sec · `claude-sonnet-5-5 medium` · 0 tokens · $0.0000'
+        reviews=[self.with_signature({'id':n,'user':{'login':'so-upstars'},'body':''},line)
+                 for n,line in enumerate((USED_EXAMPLE,legacy),101)]
+        state,_=self.run_summary({'reviews':reviews})
+        body=state['comments'][0]['body']
+        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 49 sec | 202,629 | $0.16 |',body)
+        self.assertIn('| **Total** | | | **49 sec** | **202,629** | **$0.16** |',body)
         self.assertIn('| Measured | | | 2/2 | 2/2 | 2/2 |',body)
 
     def test_summary_is_a_table_with_per_review_usage(self):

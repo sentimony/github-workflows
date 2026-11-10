@@ -6,10 +6,14 @@ all reviewer output as data. The schema grants no token, write permission, or ap
 to the read-only reviewer.
 
 The reusable engine is `.github/workflows/auto-reviewer-shared.yaml`, named
-`Auto Reviewer (Shared)`. Fresh review footers identify it with separate code spans:
-`` `auto-reviewer-shared.yaml` `<ref>` workflow ``. History readers also accept the
-released `auto-reviewer.yaml` identity in split or combined spans and older skill-only
-footers. The ledger marker and schema remain unchanged.
+`Auto Reviewer (Shared)`. The reviewer writes the internal draft footer with separate
+workflow/ref spans and a Next step line; trusted publish validates it and renders the
+public comment. The public body shows `Readiness: **Ready**` (or the other validated
+readiness), the verdict table, one collapsed Details block, and a `Used:` footer.
+That footer links superscript skill/workflow versions, groups model and effort in one
+code span, and retains measured duration, tokens and cost without a Next step line.
+History readers accept both the new Used footer and released split, combined and
+skill-only footers. The ledger marker and schema remain unchanged.
 
 Manual workflow dispatch accepts only `pr`. The `pr_number` field below belongs to
 the JSON transport and ledger schema and remains required.
@@ -134,8 +138,8 @@ stores one canonical object as JSON in its own review body's service comment:
 <!-- claude-review-ledger:v1 {<canonical JSON object>} -->
 ```
 
-The marker is outside the single visible Details block and before the two closing
-footer lines. It adds no visible heading or second `<details>` block. Validate the
+The marker is outside the single visible Details block and before the Used footer
+(or the closing footer lines in historical reviews). It adds no visible heading or second `<details>` block. Validate the
 review's API author as `yngwald`, repository/PR, reviewed SHA, container ID equal to
 `published_review_id`, and both versions before importing it. Another author's marker
 or a marker on a different head cannot authorize an action on the current head.

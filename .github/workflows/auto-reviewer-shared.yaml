@@ -265,9 +265,11 @@ jobs:
               all_threads=threads()
               valid=[]; unknown=False; review_durations=[]; usages=[]
               usage_re=re.compile(r'^Reviewed with: (?:(?:`auto-reviewer(?:-shared)?\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer(?:-shared)?\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` [^\n]+) skill · In `?[0-9]+ min [0-9]+ sec`?(?: · `?([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?)`? `?(low|medium|high)`? · `?([0-9]+(?:,[0-9]{3})*) tokens`? · `?\$([0-9]+\.[0-9]{4})`?)?$',re.M)
+              used_usage_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[[A-Za-z0-9][A-Za-z0-9._/-]*\]\(https://github\.com/sentimony/github-workflows\)</sup> · `([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)` · `[0-9]+ min [0-9]+ sec` · `([0-9]+(?:,[0-9]{3})*) tokens` · `\$([0-9]+\.[0-9]{4})`$',re.M)
+              used_duration_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[[A-Za-z0-9][A-Za-z0-9._/-]*\]\(https://github\.com/sentimony/github-workflows\)</sup> · (?:`[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])? (?:low|medium|high)` · )?`([0-9]+) min ([0-9]+) sec`(?: · .*)?$',re.M)
               for r in reviews:
                   review_durations.append(None)
-                  found_usage=usage_re.findall(r.get('body') or '')
+                  found_usage=usage_re.findall(r.get('body') or '') + used_usage_re.findall(r.get('body') or '')
                   found_usage=[(m,e,n.replace(',',''),c) for m,e,n,c in found_usage]
                   usages.append(found_usage[0] if len(found_usage)==1 and found_usage[0][0] else None)
                   raw=ledger_re.findall(r.get('body') or '')
@@ -280,6 +282,7 @@ jobs:
                   except (Stop, ValueError, KeyError, TypeError):
                       unknown=True
                       signature=re.findall(r'^Reviewed with: (?:(?:`auto-reviewer(?:-shared)?\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer(?:-shared)?\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` [^\n]+) skill · In `?([0-9]+) min ([0-9]+) sec`?(?: · .*)?$',r.get('body') or '',re.M)
+                      signature += used_duration_re.findall(r.get('body') or '')
                       if len(signature)==1 and int(signature[0][1])<60: review_durations[-1]=int(signature[0][0])*60+int(signature[0][1])
               durations=[d for d in review_durations if d is not None]
               origins={}
@@ -1061,9 +1064,10 @@ jobs:
               Next step: `/verify -> /finalize squash`. `squash` recommends the merge method.
             - Any other result: ``Next step: `/<skill>` · <reason>``; `none` stays plain text
               (`Next step: none · <reason>`).
-            The publish step cuts the reason after ` · ` and leaves the first two forms whole. The ` · ` and
-            ` -> ` in these two lines are the required format, not dashes. Write the signature without
-            a duration; the workflow appends measured duration and usage in code spans afterwards.
+            These closing lines are the internal draft contract. Trusted publish renders a Used footer
+            and omits Next step from the public comment. Keep ` · ` and ` -> ` in the draft as specified.
+            Write the signature without a duration; the workflow appends measured duration and usage
+            in code spans afterwards.
             The signature line:
             Reviewed with: `auto-reviewer-shared.yaml` `${{ steps.workflow_identity.outputs.ref }}` workflow · `cr-request` `v${{ steps.skill.outputs.version }}` skill
           # Reads stay in the workspace and the installed skill, so injected PR text cannot steer the agent
@@ -1264,7 +1268,7 @@ jobs:
       ACTIONS_FILE: review-out/review-actions.json
       REVIEW_THREADS_FILE: review-out/target/threads.json
       REVIEW_THREADS_DIGEST: ${{ needs.review.outputs.threads_digest }}
-      # The body as posted: the agent's body with the reason cut from the Next step line.
+      # Trusted public rendering of the validated draft: readiness, table, collapsed details, Used footer.
       POST_FILE: review-out/post.md
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -1409,9 +1413,9 @@ jobs:
           fail() { post_status failure "$1"; exit 1; }
           [[ "$VERSION" =~ ^[0-9][0-9.]*$ ]] || fail "No cr-request version from the review job"
           [ "$(head -n 1 "$BODY_FILE" | tr -d '\r')" = "$MARKER" ] || fail "The review body does not start with the marker"
-          # The signature with the duration the review job appended, then the full `Next step` line
-          # (cr-request 0.0.6+). A signature as the very last line is the order before 0.0.6, for a
-          # REVIEW_SKILLS_REF override.
+          # Validate the internal draft signature and trailing Next step (cr-request 0.0.6+).
+          # A signature as the very last line is the older order for a REVIEW_SKILLS_REF override;
+          # trusted rendering below replaces both lines in the public body.
           tail2=$(tr -d '\r' < "$BODY_FILE" | grep -v '^[[:space:]]*$' | tail -n 2 | sed 's/[[:space:]]*$//' || true)
           prev=$(head -n 1 <<< "$tail2")
           last=$(tail -n 1 <<< "$tail2")
@@ -1429,20 +1433,81 @@ jobs:
           else
             fail "The review body does not end with the signature and Next step lines"
           fi
-          # The Next step line loses the reason after ` · ` (the chain and findings forms have none, so they
-          # stay whole) and sits right under the signature with no blank line between (GitHub renders the
-          # line break). A blank line goes before the footer: right after `</details>` it would join that
-          # HTML block raw.
-          pair=0
-          [ "$signature" = "$last" ] || pair=1
-          awk -v pair="$pair" '
-            { sub(/\r$/, "") }
-            NR == FNR { if ($0 !~ /^[[:space:]]*$/) { prev = last; last = FNR } next }
-            FNR == (pair ? prev : last) && before !~ /^[[:space:]]*$/ { print "" }
-            pair && FNR > prev && FNR < last { next }
-            pair && FNR == last { sub(/ · .*/, "") }
-            { print; before = $0 }
-          ' "$BODY_FILE" "$BODY_FILE" > "$POST_FILE"
+          # The Next step line loses its public role: keep the generic draft intact and render here.
+          export REVIEW_SIGNATURE="$signature"
+          python3 -I - <<'PYRENDER'
+          import os, re
+          from pathlib import Path
+
+          source = Path(os.environ['BODY_FILE']).read_text(encoding='utf-8').replace('\r', '')
+          signature = os.environ['REVIEW_SIGNATURE']
+          footer = re.fullmatch(
+              r'Reviewed with: `auto-reviewer-shared\.yaml` `([^`]+)` workflow · '
+              r'`cr-request` `v([0-9.]+)` skill · In `([0-9]+ min [0-9]+ sec)`'
+              r'(?: · `([^`]+)` `(low|medium|high)` · `([0-9,]+ tokens)` · `(\$[0-9]+\.[0-9]{4})`)?',
+              signature)
+          if footer is None:
+              raise SystemExit('Cannot render the validated review signature')
+          # Mask Markdown code without changing offsets into the original review evidence.
+          def mask(text):
+              return re.sub(r'[^\n]', ' ', text)
+          visible = []
+          fence = None
+          for line in source.splitlines(keepends=True):
+              if fence is not None:
+                  visible.append(mask(line))
+                  if re.fullmatch(r' {0,3}' + re.escape(fence[0]) + '{' + str(fence[1]) + r',}[ \t]*', line.rstrip('\n')):
+                      fence = None
+                  continue
+              start = re.match(r' {0,3}(`{3,}|~{3,})([^\n]*)', line)
+              if start and (start[1][0] == '~' or '`' not in start[2]):
+                  fence = (start[1][0], len(start[1]))
+                  visible.append(mask(line))
+              else:
+                  visible.append(mask(line) if line.startswith(('    ', '\t')) else line)
+          structural = re.sub(r'(?<!`)(`+)(?!`)(.*?)(?<!`)\1(?!`)',
+                              lambda match: mask(match[0]), ''.join(visible), flags=re.S)
+          structural = re.sub(r'<!--.*?-->', lambda match: mask(match[0]), structural, flags=re.S)
+          opening = list(re.finditer(r'^<details(?:[ \t][^>]*)?><summary>Details</summary>[ \t]*$', structural, re.M))
+          closing = list(re.finditer(r'^</details>[ \t]*$', structural, re.M))
+          if (len(opening) != 1 or len(closing) != 1
+                  or len(re.findall(r'<details\b', structural, re.I)) != 1
+                  or len(re.findall(r'</details\s*>', structural, re.I)) != 1
+                  or closing[0].start() <= opening[0].end()):
+              raise SystemExit('Expected one Details block')
+          preamble = source[:opening[0].start()]
+          readiness = re.findall(r'^\*\*Readiness:\*\* ([Rr]eady with fixes|[Nn]ot ready|[Rr]eady)\s*$', preamble, re.M)
+          table = re.findall(
+              r'^\| *Intent *\| *System *\| *Craft *\| *Critical *\| *Important *\| *Minor *\|\s*\n'
+              r'\|[^\n]+\|\s*\n\|[^\n]+\|', preamble, re.M)
+          if len(readiness) != 1 or len(table) != 1:
+              raise SystemExit('Expected one readiness line and summary table')
+          # Never silently discard report evidence outside the agreed visible layout.
+          outside = preamble.replace(source.splitlines()[0], '', 1).replace(table[0], '', 1)
+          outside = re.sub(r'^\*\*Readiness:\*\* ([Rr]eady with fixes|[Nn]ot ready|[Rr]eady)[ \t]*$', '', outside, flags=re.M)
+          tail = [line.strip() for line in source[closing[0].end():].splitlines() if line.strip()]
+          if (outside.strip() or tail.count(signature) != 1 or len(tail) not in (1, 2)
+                  or any(line != signature and not line.startswith('Next step: ') for line in tail)):
+              raise SystemExit('Unexpected text outside Details')
+          ref, version, duration, model, effort, tokens, cost = footer.groups()
+          if re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9._-]+)?', ref):
+              ref = ref[1:]
+          used = (f'Used: `cr-request` <sup>[{version}](https://www.skills.sh/sentimony/agentic-workflow/cr-request)</sup>'
+                  f' · `auto-reviewer-shared` <sup>[{ref}](https://github.com/sentimony/github-workflows)</sup>')
+          if model is not None:
+              used += f' · `{model} {effort}`'
+          used += f' · `{duration}`'
+          if tokens is not None:
+              used += f' · `{tokens}` · `{cost}`'
+          evidence = source[opening[0].end():closing[0].start()].strip('\n')
+          marker = source.splitlines()[0]
+          readiness = readiness[0][0].upper() + readiness[0][1:]
+          body = (marker + '\n\nReadiness: **' + readiness + '**\n\n' + table[0].strip()
+                  + '\n\n<details><summary>Details</summary>\n\n' + evidence
+                  + '\n\n</details>\n\n' + used + '\n')
+          Path(os.environ['POST_FILE']).write_text(body, encoding='utf-8')
+          PYRENDER
+          signature="$(tail -n 1 "$POST_FILE")"
           # GitHub rejects review bodies over 65536 characters; bytes are the stricter bound.
           [ "$(wc -c < "$POST_FILE")" -le 65536 ] || fail "The review body is longer than GitHub accepts"
           [ -f "$COMMENTS_FILE" ] || echo '[]' > "$COMMENTS_FILE"
@@ -1798,7 +1863,7 @@ jobs:
               marker='<!-- claude-review-ledger:v1 '+encoded(envelope)+' -->'
               # Keep the marker before the existing footer, outside the single details block.
               lines=Path(os.environ['POST_FILE']).read_text(encoding='utf-8').splitlines()
-              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Reviewed with: `auto-reviewer-shared.yaml` ', 'Reviewed with: `auto-reviewer-shared.yaml@', 'Reviewed with: `auto-reviewer.yaml` ', 'Reviewed with: `auto-reviewer.yaml@', 'Reviewed with: `cr-request` ', 'Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
+              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Used: ', 'Reviewed with: `auto-reviewer-shared.yaml` ', 'Reviewed with: `auto-reviewer-shared.yaml@', 'Reviewed with: `auto-reviewer.yaml` ', 'Reviewed with: `auto-reviewer.yaml@', 'Reviewed with: `cr-request` ', 'Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
               require(idx is not None,'review footer unavailable')
               body='\n'.join(lines[:idx]+[marker]+lines[idx:])+'\n'
               require(len(body.encode())<=65536,'ledger exceeds review body limit')
@@ -1893,6 +1958,8 @@ jobs:
               for f in d['findings']: f['origin_review_id']=review_id
               signature=Path(os.environ['POST_FILE']).read_text(encoding='utf-8')
               m=re.search(r'^Reviewed with: (?:(?:`auto-reviewer(?:-shared)?\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer(?:-shared)?\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` .*) skill · In `?([0-9]+) min ([0-9]+) sec`?(?: · .*)?$',signature,re.M)
+              if m is None:
+                  m=re.search(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[[A-Za-z0-9][A-Za-z0-9._/-]*\]\(https://github\.com/sentimony/github-workflows\)</sup> · (?:`[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])? (?:low|medium|high)` · )?`([0-9]+) min ([0-9]+) sec`(?: · .*)?$',signature,re.M)
               duration=int(m[1])*60+int(m[2]) if m else None
               d.update(envelope_version=1,published_review_id=review_id,run_id=run_id,duration_seconds=duration,
                        action_progress=[],disposition_events=events)
@@ -2004,11 +2071,14 @@ jobs:
                   body=post.read_text(encoding='utf-8')
                   # Keep any independent readiness gap and any unassessed axis intact.
                   assessed = re.search(r'^\| *Intent *\| *System *\| *Craft *\| *Critical *\| *Important *\| *Minor *\|\s*\n[^\n]*\n\| *(PASS|FINDINGS|UNASSESSED) *\| *(PASS|FINDINGS|UNASSESSED) *\| *(PASS|FINDINGS|UNASSESSED) *\|', body, re.M)
-                  if assessed and 'UNASSESSED' not in assessed.groups() and re.search(r'^\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Rr]eady)$', body, re.M):
-                      body,n=re.subn(r'^\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Rr]eady)$', '**Readiness:** Ready', body, flags=re.M)
+                  readiness_re=r'^(?:\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Rr]eady)|Readiness: \*\*(?:[Rr]eady with fixes|[Rr]eady)\*\*)$'
+                  if assessed and 'UNASSESSED' not in assessed.groups() and re.search(readiness_re, body, re.M):
+                      public = re.search(r'^Readiness: \*\*', body, re.M) is not None
+                      body,n=re.subn(readiness_re, 'Readiness: **Ready**' if public else '**Readiness:** Ready', body, flags=re.M)
                       require(n==1, 'readiness line unavailable')
-                      body,n=re.subn(r'^Next step: .*$', 'Next step: `/verify -> /finalize squash`', body, flags=re.M)
-                      require(n==1, 'next step unavailable')
+                      if not public:
+                          body,n=re.subn(r'^Next step: .*$', 'Next step: `/verify -> /finalize squash`', body, flags=re.M)
+                          require(n==1, 'next step unavailable')
                       post.write_text(body,encoding='utf-8')
                       persist(d)
                       with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as out:
@@ -2459,7 +2529,7 @@ jobs:
               marker='<!-- claude-review-ledger:v1 '+encoded(envelope)+' -->'
               # Keep the marker before the existing footer, outside the single details block.
               lines=Path(os.environ['POST_FILE']).read_text(encoding='utf-8').splitlines()
-              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Reviewed with: `auto-reviewer-shared.yaml` ', 'Reviewed with: `auto-reviewer-shared.yaml@', 'Reviewed with: `auto-reviewer.yaml` ', 'Reviewed with: `auto-reviewer.yaml@', 'Reviewed with: `cr-request` ', 'Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
+              idx=next((i for i in range(len(lines)-1,-1,-1) if lines[i].startswith(('Used: ', 'Reviewed with: `auto-reviewer-shared.yaml` ', 'Reviewed with: `auto-reviewer-shared.yaml@', 'Reviewed with: `auto-reviewer.yaml` ', 'Reviewed with: `auto-reviewer.yaml@', 'Reviewed with: `cr-request` ', 'Reviewed with: `cr-request@v', 'Reviewed with: `/cr-request` '))),None)
               require(idx is not None,'review footer unavailable')
               body='\n'.join(lines[:idx]+[marker]+lines[idx:])+'\n'
               require(len(body.encode())<=65536,'ledger exceeds review body limit')
@@ -2554,6 +2624,8 @@ jobs:
               for f in d['findings']: f['origin_review_id']=review_id
               signature=Path(os.environ['POST_FILE']).read_text(encoding='utf-8')
               m=re.search(r'^Reviewed with: (?:(?:`auto-reviewer(?:-shared)?\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer(?:-shared)?\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` .*) skill · In `?([0-9]+) min ([0-9]+) sec`?(?: · .*)?$',signature,re.M)
+              if m is None:
+                  m=re.search(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[[A-Za-z0-9][A-Za-z0-9._/-]*\]\(https://github\.com/sentimony/github-workflows\)</sup> · (?:`[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])? (?:low|medium|high)` · )?`([0-9]+) min ([0-9]+) sec`(?: · .*)?$',signature,re.M)
               duration=int(m[1])*60+int(m[2]) if m else None
               d.update(envelope_version=1,published_review_id=review_id,run_id=run_id,duration_seconds=duration,
                        action_progress=[],disposition_events=events)
@@ -2665,11 +2737,14 @@ jobs:
                   body=post.read_text(encoding='utf-8')
                   # Keep any independent readiness gap and any unassessed axis intact.
                   assessed = re.search(r'^\| *Intent *\| *System *\| *Craft *\| *Critical *\| *Important *\| *Minor *\|\s*\n[^\n]*\n\| *(PASS|FINDINGS|UNASSESSED) *\| *(PASS|FINDINGS|UNASSESSED) *\| *(PASS|FINDINGS|UNASSESSED) *\|', body, re.M)
-                  if assessed and 'UNASSESSED' not in assessed.groups() and re.search(r'^\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Rr]eady)$', body, re.M):
-                      body,n=re.subn(r'^\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Rr]eady)$', '**Readiness:** Ready', body, flags=re.M)
+                  readiness_re=r'^(?:\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Rr]eady)|Readiness: \*\*(?:[Rr]eady with fixes|[Rr]eady)\*\*)$'
+                  if assessed and 'UNASSESSED' not in assessed.groups() and re.search(readiness_re, body, re.M):
+                      public = re.search(r'^Readiness: \*\*', body, re.M) is not None
+                      body,n=re.subn(readiness_re, 'Readiness: **Ready**' if public else '**Readiness:** Ready', body, flags=re.M)
                       require(n==1, 'readiness line unavailable')
-                      body,n=re.subn(r'^Next step: .*$', 'Next step: `/verify -> /finalize squash`', body, flags=re.M)
-                      require(n==1, 'next step unavailable')
+                      if not public:
+                          body,n=re.subn(r'^Next step: .*$', 'Next step: `/verify -> /finalize squash`', body, flags=re.M)
+                          require(n==1, 'next step unavailable')
                       post.write_text(body,encoding='utf-8')
                       persist(d)
                       with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as out:

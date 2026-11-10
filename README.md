@@ -18,6 +18,12 @@ and the released-tag/SHA skill installer remain unchanged. Installation retries 
 three times and stops the review if every attempt fails. The review duration starts
 after installation and immediately before inference.
 
+Published comments show readiness first, then the verdict table, a collapsed Details
+block, and a Used footer. The footer links skill and workflow versions in superscript,
+groups model and effort, and shows measured duration, tokens and cost. The public
+comment omits Next step; the reviewer's internal draft retains its validated contract.
+History and cycle summaries continue to read earlier review formats.
+
 ### Contract
 
 1. `required-ci-job` is a required string. It must match `[A-Za-z_][A-Za-z0-9_-]*`.

@@ -963,14 +963,14 @@ USED_EXAMPLE = 'Used: `cr-request` <sup>[0.0.16](https://www.skills.sh/sentimony
 
 
 class PublicPresentationTest(unittest.TestCase):
-    def render(self, readiness='Ready', ref='v0.0.4', usage=True, reversed_footer=False, details='<details open><summary>Details</summary>', full=False, evidence='Full evidence.', extra_before='', extra_after=''):
+    def render(self, readiness='Ready', ref='v0.0.4', usage=True, reversed_footer=False, details='<details open><summary>Details</summary>', full=False, evidence='Full evidence.', extra_before='', extra_after='', row='| PASS | PASS | PASS | 0 | 0 | 0 |'):
         signature=f'Reviewed with: `auto-reviewer-shared.yaml` `{ref}` workflow · `cr-request` `v0.0.16` skill · In `0 min 49 sec`'
         if usage:
             signature+=' · `claude-sonnet-5-5` `medium` · `202,629 tokens` · `$0.1634`'
         footer=[signature,'Next step: `/verify -> /finalize squash`']
         if reversed_footer: footer.reverse()
         marker='<!-- claude-review sha='+('a'*40)+' -->'
-        table='| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | 0 | 0 | 0 |'
+        table='| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n'+row
         body=marker+'\n\n'+extra_before+table+'\n\n**Readiness:** '+readiness+'\n\n'+details+'\n\n'+evidence+'\n\n</details>\n\n'+extra_after+'\n'.join(footer)+'\n'
         script=step('Validate review body')
         fragment=script[script.index('# The Next step line loses'):script.index('# GitHub rejects review bodies over')]
@@ -980,7 +980,8 @@ class PublicPresentationTest(unittest.TestCase):
                  'LAST_LINE':footer[-1]}
             if full:
                 fake=root/'gh'
-                fake.write_text('#!/bin/sh\ncase "$2" in\n  */status[?]*) echo run-url ;;\n  */pulls/42) echo '+('a'*40)+' ;;\n  *) exit 2 ;;\nesac\n')
+                fake.write_text('#!/bin/sh\ncase "$2" in\n  */status[?]*) echo run-url ;;\n  */pulls/42) echo '+('a'*40)+' ;;\n'
+                                '  */statuses/*) echo "$*" >> '+str(root/'statuses')+' ;;\n  *) exit 2 ;;\nesac\n')
                 fake.chmod(0o755)
                 env.update(PATH=str(root)+os.pathsep+os.environ['PATH'],REPO='owner/repo',NUMBER='42',HEAD_SHA='a'*40,
                            RUN_URL='run-url',CONTEXT='Auto Reviewer',MARKER=marker,JOB_STATUS='success',REVIEW_RESULT='success',VERSION='0.0.16',
@@ -991,6 +992,7 @@ class PublicPresentationTest(unittest.TestCase):
                 command='signature="$INTERNAL_SIGNATURE"; last="$LAST_LINE"\n'+fragment
             result=subprocess.run(['bash','-eo','pipefail','-c',command],env=env,capture_output=True,text=True)
             result.outputs=(root/'output').read_text() if (root/'output').exists() else ''
+            result.statuses=(root/'statuses').read_text() if (root/'statuses').exists() else ''
             return result,(root/'post').read_text() if (root/'post').exists() else '',marker,table
 
     def test_exact_requested_published_layout(self):
@@ -1153,21 +1155,34 @@ class FooterTest(unittest.TestCase):
                     self.assertEqual(result.returncode==0,signature in accepts,result.stderr)
 
 class ReadinessTest(unittest.TestCase):
-    def run_readiness(self, section):
-        script=step('Validate review body')
-        start=script.index('# Older reviews wrote the readiness')
-        end=script.index('summary="Critical')
-        fragment='fail() { echo FAIL; exit 1; }\ncritical=0; important=1; minor=2\n'+script[start:end]+'echo "$readiness"\n'
-        return subprocess.run(['bash','-c',fragment],env={**os.environ,'section':section},capture_output=True,text=True)
-
     def test_capitalised_and_legacy_lowercase_readiness_read_as_capitalised(self):
-        for line,expected in [('**Readiness:** Ready','Ready'),('**Readiness:** Ready with fixes','Ready with fixes'),
-                              ('**Readiness:** Not ready','Not ready'),('**Readiness:** ready','Ready'),
-                              ('**Readiness:** ready with fixes','Ready with fixes'),('**Readiness:** not ready','Not ready')]:
-            with self.subTest(line=line):
-                result=self.run_readiness('text\n'+line+'\n')
-                self.assertEqual(result.stdout.strip(),expected,result.stderr)
-        self.assertIn('FAIL',self.run_readiness('**Readiness:** Almost\n').stdout)
+        presentation=PublicPresentationTest()
+        for readiness,expected,state in [('Ready','Ready','success'),('Ready with fixes','Ready with fixes','success'),
+                                         ('Not ready','Not ready','failure'),('ready','Ready','success'),
+                                         ('ready with fixes','Ready with fixes','success'),('not ready','Not ready','failure')]:
+            with self.subTest(readiness=readiness):
+                result,_,_,_=presentation.render(readiness=readiness,full=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn('summary=Critical 0, Important 0, Minor 0; '+expected+'\n',result.outputs)
+                self.assertIn('state='+state+'\n',result.outputs)
+        result,body,_,_=presentation.render(readiness='Almost',full=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(body,'')
+
+    def test_summary_row_counts_and_strict_grammar(self):
+        presentation=PublicPresentationTest()
+        result,_,_,_=presentation.render(row='| FINDINGS | PASS | UNASSESSED | 1 | 2 | 3 |',full=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('summary=Critical 1, Important 2, Minor 3; Ready\n',result.outputs)
+        self.assertIn('state=failure\n',result.outputs)
+        for row in ('| PASS | PASS | OK | 0 | 0 | 0 |','| PASS | PASS | PASS | 0 | 0 | x |','| PASS | PASS | PASS | 0 | 0 |'):
+            with self.subTest(row=row):
+                result,body,_,_=presentation.render(row=row,full=True)
+                self.assertNotEqual(result.returncode,0)
+                self.assertEqual(body,'')
+                self.assertNotIn('ready_to_post',result.outputs)
+                self.assertIn('state=failure',result.statuses)
+                self.assertIn('description=The review has no valid Summary table',result.statuses)
 
     def test_prompt_and_state_use_capitalised_readiness(self):
         text=WORKFLOW.read_text(encoding='utf-8')
@@ -1246,7 +1261,7 @@ class TokenFilterTest(unittest.TestCase):
     def test_atlassian_prefix_is_blocked_in_every_transport(self):
         script=step('Validate review body')
         start=script.index("if grep -qE '")
-        end=script.index('# The one-row Summary table:',start)
+        end=script.index('summary="Critical',start)
         fragment='fail() { exit 1; }\n'+script[start:end]
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
@@ -1286,7 +1301,7 @@ class DecodedTokenFilterTest(unittest.TestCase):
     def test_escaped_prefixes_and_malformed_json_are_rejected(self):
         script=step('Validate review body')
         start=script.index("if grep -qE '")
-        end=script.index('# The one-row Summary table:',start)
+        end=script.index('summary="Critical',start)
         fragment='fail() { exit 1; }\n'+script[start:end]
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)

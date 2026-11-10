@@ -3,7 +3,7 @@
 One release tag covers every workflow in this repository. Each release lists its changes
 per workflow, newest first.
 
-## Unreleased
+## v0.0.5
 
 ### auto-reviewer-shared
 
@@ -12,6 +12,10 @@ per workflow, newest first.
    PREPARE or COMPLETE behavior. The workflow shrinks by 468 lines.
 2. The ledger lists repository issues once per run instead of once per accepted deferred
    finding.
+3. `Validate review body` parses the Summary table and readiness once, in the renderer,
+   with the same strict row grammar. The inline comments and review actions JSON are
+   checked for token-like strings only after decoding, and invalid JSON now sets a failure
+   status.
 
 ## v0.0.4 - 2026-11-10
 

@@ -1375,10 +1375,6 @@ jobs:
             gh api "repos/$REPO/statuses/$HEAD_SHA" -f state="$1" -f description="$2" \
               -f context="$CONTEXT" -f target_url="$RUN_URL" > /dev/null
           }
-          summary_section() {
-            tr -d '\r' < "$BODY_FILE" | awk '/^<details>/ {skip = 1} /^<\/details>/ {skip = 0; next} skip {next}
-              /^### / {on = ($0 ~ /^### Summary[[:space:]]*$/); seen = 1; next} on || !seen'
-          }
 
           # Only the run whose gate set the latest status reports: an older run must not overwrite a
           # newer gate's status. Accepted trade-off (AGENTS.md): a workflow_dispatch run and an
@@ -1436,8 +1432,10 @@ jobs:
           fi
           # The Next step line loses its public role: keep the generic draft intact and render here.
           export REVIEW_SIGNATURE="$signature"
-          python3 -I - <<'PYRENDER'
-          import os, re
+          # Exit 3 marks an invalid Summary row; the counts and readiness come back on stdout.
+          rc=0
+          parsed=$(python3 -I - <<'PYRENDER'
+          import os, re, sys
           from pathlib import Path
 
           source = Path(os.environ['BODY_FILE']).read_text(encoding='utf-8').replace('\r', '')
@@ -1486,6 +1484,12 @@ jobs:
               r'\|[^\n]+\|\s*\n\|[^\n]+\|', preamble, re.M)
           if len(readiness) != 1 or len(table) != 1:
               raise SystemExit('Expected one readiness line and summary table')
+          lines = table[0].strip().split('\n')
+          verdict = r' *(?:PASS|FINDINGS|UNASSESSED) *\|'
+          row = re.fullmatch(r'\|' + verdict * 3 + r' *([0-9]+) *\| *([0-9]+) *\| *([0-9]+) *\|', lines[-1].rstrip())
+          if len(lines) != 3 or row is None:
+              print('Invalid Summary table row', file=sys.stderr)
+              sys.exit(3)
           # Never silently discard report evidence outside the agreed visible layout.
           outside = preamble.replace(source.splitlines()[0], '', 1).replace(table[0], '', 1)
           outside = re.sub(r'^\*\*Readiness:\*\* ([Rr]eady with fixes|[Nn]ot ready|[Rr]eady)[ \t]*$', '', outside, flags=re.M)
@@ -1510,7 +1514,12 @@ jobs:
                   + '\n\n<details><summary>Details</summary>\n\n' + evidence
                   + '\n\n</details>\n\n' + used + '\n')
           Path(os.environ['POST_FILE']).write_text(body, encoding='utf-8')
+          print(*row.groups(), readiness)
           PYRENDER
+          ) || rc=$?
+          [ "$rc" -ne 3 ] || fail "The review has no valid Summary table"
+          [ "$rc" -eq 0 ] || exit "$rc"
+          read -r critical important minor readiness <<< "$parsed"
           signature="$(tail -n 1 "$POST_FILE")"
           # GitHub rejects review bodies over 65536 characters; bytes are the stricter bound.
           [ "$(wc -c < "$POST_FILE")" -le 65536 ] || fail "The review body is longer than GitHub accepts"
@@ -1519,12 +1528,12 @@ jobs:
             and (.path | type == "string") and (.line | type == "number" and . >= 1 and floor == .)
             and (.body | type == "string" and length > 0 and length <= 8000))' "$COMMENTS_FILE" > /dev/null \
             || fail "The inline comments file is malformed"
-          if grep -qE '(ghp_|ghs_|gho_|ghu_|ghr_|github_pat_|sk-ant-|sb_secret_|ATATT)[A-Za-z0-9]' "$POST_FILE" "$COMMENTS_FILE" \
-            || { [ -f "$ACTIONS_FILE" ] && grep -qE '(ghp_|ghs_|gho_|ghu_|ghr_|github_pat_|sk-ant-|sb_secret_|ATATT)[A-Za-z0-9]' "$ACTIONS_FILE"; }; then
+          if grep -qE '(ghp_|ghs_|gho_|ghu_|ghr_|github_pat_|sk-ant-|sb_secret_|ATATT)[A-Za-z0-9]' "$POST_FILE"; then
             fail "Review output contains a token-like string"
           fi
 
-          python3 -I - <<'PYTOKENS'
+          # The JSON transports are checked decoded, so escaped prefixes cannot slip through.
+          python3 -I - <<'PYTOKENS' || fail "Review JSON contains a token-like string or invalid data"
           import json, os, re, sys
           from pathlib import Path
 
@@ -1554,22 +1563,6 @@ jobs:
               print('::error::Review JSON contains a token-like string or invalid data', file=sys.stderr)
               sys.exit(1)
           PYTOKENS
-
-          # The one-row Summary table: its header, the separator, then the data row.
-          header_re='^\| *Intent *\| *System *\| *Craft *\| *Critical *\| *Important *\| *Minor *\|$'
-          verdict='(PASS|FINDINGS|UNASSESSED)'
-          row_re="^\| *$verdict *\| *$verdict *\| *$verdict *\| *([0-9]+) *\| *([0-9]+) *\| *([0-9]+) *\|\$"
-          section=$(summary_section | sed 's/[[:space:]]*$//')
-          row=$(grep -A 2 -E "$header_re" <<< "$section" | sed -n 3p || true)
-          [[ "$row" =~ $row_re ]] || fail "The review has no valid Summary table"
-          critical="${BASH_REMATCH[4]}"
-          important="${BASH_REMATCH[5]}"
-          minor="${BASH_REMATCH[6]}"
-          # Older reviews wrote the readiness in lowercase; both forms read as the capitalised one.
-          readiness=$(grep -oE '\*\*Readiness:\*\* *([Rr]eady with fixes|[Nn]ot ready|[Rr]eady)$' <<< "$section" \
-            | sed -E 's/.*\*\* *//' | head -n 1 || true)
-          [ -n "$readiness" ] || fail "The review has no merge readiness"
-          readiness="$(tr '[:lower:]' '[:upper:]' <<< "${readiness:0:1}")${readiness:1}"
 
           summary="Critical $critical, Important $important, Minor $minor; $readiness"
           state=success

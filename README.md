@@ -66,9 +66,9 @@ Live equivalence requires runs against the tagged callee.
 
 Release tags are immutable: never move or recreate one. For later changes, create a new
 patch tag on the merged central commit, push it to origin, confirm it resolves, and
-update callers to that exact tag before merging their changes. Record each change under
-`Unreleased` in [CHANGELOG.md](CHANGELOG.md) in the same PR, and rename that section to
-the tag before tagging.
+update callers to that exact tag before merging their changes. Record each change in the
+same PR under the next patch tag's section of [CHANGELOG.md](CHANGELOG.md), and add the
+release date to that heading when tagging.
 
 This repository's `.github/workflows/auto-reviewer.yaml`, named `Auto Reviewer`,
 targets `.github/workflows/auto-reviewer-shared.yaml@v0.0.4` with the `validate`

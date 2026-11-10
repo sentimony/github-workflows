@@ -57,3 +57,11 @@ against `.github/workflows/auto-reviewer.yaml` with `--required-ci-job validate`
 8. Released contracts are not kept as test snapshots (the v0.0.2 snapshot was removed at
    the owner's request): tags are immutable, and the checker is tested against the
    current workflow and callers. This is an accepted trade-off, not a defect for review.
+9. Keep Actions secrets in each consumer repository, not at the organization level: the
+   sentimony organization is on GitHub Free, where organization secrets do not reach
+   private repositories, even when the REST list shows their names. Check the plan
+   (`gh api orgs/<org> --jq .plan.name`) before proposing a migration.
+10. `invalid header field value for "Authorization"` from `gh` in a job means a malformed
+    secret value (an extra line or space), not missing permissions: the request never
+    left the runner. Ask the owner to re-save the PAT as one line without printing it,
+    then rerun the failed jobs if the head is unchanged.

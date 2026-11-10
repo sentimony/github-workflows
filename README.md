@@ -14,9 +14,15 @@ The runner installs Claude Code from the native `latest` channel on each review 
 checks that executable with `--version`, records the version in the step summary,
 and passes its path to the pinned
 `anthropics/claude-code-action`. The CLI version can change between runs; the action SHA
-and the released-tag/SHA skill installer remain unchanged. Installation retries up to
-three times and stops the review if every attempt fails. The review duration starts
-after installation and immediately before inference.
+remains unchanged. Installation retries up to three times and stops the review if every
+attempt fails. The review duration starts after installation and immediately before
+inference.
+
+The cr-request skill is installed with `npx -y --prefer-online skl-x@latest add
+<source>/tree/<ref> -s cr-request -a claude-code -g -y -m sm`, using the runner's Node.
+The `skl-x` version moves with each release; the skill itself comes from the newest
+`vX.Y.Z` tag of `sentimony/agentic-workflow` or the `REVIEW_SKILLS_REF` commit, must
+install as a plain directory without symbolic links, and must name its version.
 
 Published comments show readiness first, then the verdict table, a collapsed Details
 block, and a Used footer. The footer links skill and workflow versions in superscript,
@@ -28,13 +34,11 @@ History and cycle summaries continue to read earlier review formats.
 
 1. `required-ci-job` is a required string. It must match `[A-Za-z_][A-Za-z0-9_-]*`.
 2. `pr` is the only optional PR-number string, with an empty default for manual dispatch.
-3. The unreleased source requires secret inputs `AUTO_REVIEWER_YNGWALD` and
-   `CLAUDE_CODE_OAUTH_TOKEN`, each bound to the repository secret of the same name.
-   The old `YNGWALD_PR_TOKEN` input is removed from the source contract. The caller
-   examples target the upcoming `v0.0.4` release described under [Callers](#callers).
-   Secret names alone do not guarantee nonempty values for fork or bot events. Existing
-   eligibility guards remain in place; live startup validation of secret availability
-   remains a gap.
+3. Secret inputs `AUTO_REVIEWER_YNGWALD` and `CLAUDE_CODE_OAUTH_TOKEN` are required, each
+   bound to the repository secret of the same name. The old `YNGWALD_PR_TOKEN` input is
+   removed from the contract. Secret names alone do not guarantee nonempty values for fork
+   or bot events. Existing eligibility guards remain in place; live startup validation of
+   secret availability remains a gap.
 
 The caller must declare an explicit permission ceiling covering the union of permissions
 used by the callee jobs. The caller job must omit `concurrency`, `runs-on`, and `steps`.
@@ -64,15 +68,13 @@ definition on its default branch; pull request events use the PR branch copy.
 `workflow_dispatch` becomes available once the workflow exists on the default branch.
 Live equivalence requires runs against the tagged callee.
 
-Release tags are immutable: never move or recreate one. For later changes, create a new
-patch tag on the merged central commit, push it to origin, confirm it resolves, and
-update callers to that exact tag before merging their changes.
+Release tags are immutable: a published tag never moves. Changes between tags are listed
+in [CHANGELOG.md](CHANGELOG.md).
 
 This repository's `.github/workflows/auto-reviewer.yaml`, named `Auto Reviewer`,
 targets `.github/workflows/auto-reviewer-shared.yaml@v0.0.4` with the `validate`
-CI job. The reusable workflow is named `Auto Reviewer (Shared)`. The caller requires
-the published `v0.0.4` tag; the preceding review phase used the released `v0.0.3`
-workflow to review the proposed changes, which does not prove the new engine's runtime.
+CI job. The reusable workflow is named `Auto Reviewer (Shared)`.
+
 Configure Actions secrets in each consumer repository:
 
 1. Create `AUTO_REVIEWER_YNGWALD` and `CLAUDE_CODE_OAUTH_TOKEN`, with separate token
@@ -95,7 +97,8 @@ CI runs on branch pushes, pull requests, and manual dispatch. Tag pushes do not 
 The [transport contract](AUTO_REVIEWER_SHARED_TRANSPORT.md) defines the review draft, ledger,
 and host actions.
 
-Agentic workflow (`validate`):
+<details>
+<summary>Agentic workflow (<code>validate</code>)</summary>
 
 ```yaml
 name: Auto Reviewer
@@ -128,7 +131,10 @@ jobs:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
-SoundCloud catalog (`check`):
+</details>
+
+<details>
+<summary>SoundCloud catalog (<code>check</code>)</summary>
 
 ```yaml
 name: Auto Reviewer
@@ -160,6 +166,8 @@ jobs:
       AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
+
+</details>
 
 ## Offline checks
 

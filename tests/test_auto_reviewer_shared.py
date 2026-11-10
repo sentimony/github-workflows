@@ -18,6 +18,7 @@ ADAPTER = {
     'skippable_jobs': [],
 }
 WORKFLOW = ROOT / ADAPTER['workflow']
+HELPERS_DIR = tempfile.TemporaryDirectory()
 
 
 def summary_table(body, first_column):
@@ -43,6 +44,11 @@ def step(name):
     ruby = os.environ.get('RUBY', 'ruby')
     script = "require 'yaml'; require 'json'; w=YAML.load_file(ARGV[0], aliases: true); s=w['jobs'].values.flat_map{|j| j['steps'] || []}.find{|x| x['name']==ARGV[1]}; abort 'missing step' unless s; puts JSON.generate(s.fetch('run'))"
     source = json.loads(subprocess.check_output([ruby, '-e', script, str(WORKFLOW), name], text=True))
+    if 'from auto_reviewer_lib import' in source:
+        # The job writes the shared helpers in an earlier step; run that step first.
+        source = json.loads(subprocess.check_output([ruby, '-e', script, str(WORKFLOW), 'Write review helpers'], text=True)) + source
+    if 'auto_reviewer_lib' in source:
+        source = f': "${{RUNNER_TEMP:={HELPERS_DIR.name}}}"\nexport RUNNER_TEMP\n' + source
     return source.replace(ADAPTER['reviewer'], 'so-upstars')
 
 
@@ -154,10 +160,10 @@ class TransportTest(unittest.TestCase):
         for key in ('schema_version','review_source_id','previous_findings','defer_decision'):
             self.assertIn(key,settings['prompt'])
         for name in ('Edit','Write'):
-            self.assertIn(name+'(./.auto-review/review-actions.json)',settings['claude_args'])
+            self.assertIn(name+'(./.auto-reviewer/review-actions.json)',settings['claude_args'])
         self.assertIn('--disallowedTools "Bash,',settings['claude_args'])
         upload=next(s for s in review['steps'] if str(s.get('uses','')).startswith('actions/upload-artifact@'))
-        self.assertIn('.auto-review/review-actions.json',upload['with']['path'])
+        self.assertIn('.auto-reviewer/review-actions.json',upload['with']['path'])
         self.assertEqual(workflow['jobs']['publish']['env']['ACTIONS_FILE'],'review-out/review-actions.json')
         self.assertFalse(any(str(s.get('uses','')).startswith('actions/checkout@') for s in workflow['jobs']['publish']['steps']))
 
@@ -179,6 +185,24 @@ class ResolverBoundaryTest(unittest.TestCase):
         self.assertIn('resolve_threads',jobs['complete']['needs'])
         # Footer/ledger fixtures exercise the same script in both trusted phases.
         self.assertEqual(step('Publish review actions'),step('Complete review actions'))
+        # Both jobs report a failure that left the status pending the same way.
+        self.assertEqual(step('Finalize failed publication'),step('Report an unexpected failure'))
+        self.assertIn('Publishing the review failed',step('Report an unexpected failure'))
+
+    def test_helper_users_write_the_helpers_first(self):
+        ruby=os.environ.get('RUBY','ruby')
+        jobs=json.loads(subprocess.check_output([ruby,'-e',"require 'yaml'; require 'json'; puts JSON.generate(YAML.load_file(ARGV[0], aliases: true))",str(WORKFLOW)],text=True))['jobs']
+        users=set()
+        for name,job in jobs.items():
+            steps=job.get('steps',[])
+            importing=[i for i,s in enumerate(steps) if 'from auto_reviewer_lib import' in s.get('run','')]
+            if not importing: continue
+            users.add(name)
+            writers=[i for i,s in enumerate(steps) if s.get('name')=='Write review helpers']
+            self.assertEqual(len(writers),1,name)
+            self.assertLess(writers[0],importing[0],name)
+        self.assertEqual(users,{'merged_summary','publish','complete','refresh_merged_summary'})
+        self.assertNotIn('auto_reviewer_lib',json.dumps(jobs['resolve_threads']))
 
 
 class PrepareThreadsTest(unittest.TestCase):
@@ -186,7 +210,7 @@ class PrepareThreadsTest(unittest.TestCase):
         run = step('Prepare review threads')
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / '.auto-review/target').mkdir(parents=True)
+            (root / '.auto-reviewer/target').mkdir(parents=True)
             fake = root / 'gh'
             fake.write_text('''#!/usr/bin/env python3
 import json, sys
@@ -208,7 +232,7 @@ print(json.dumps(result))
             fake.chmod(0o755)
             env = {**os.environ, 'PATH': str(root) + os.pathsep + os.environ['PATH'], 'GITHUB_REPOSITORY':'owner/repo', 'NUMBER':'42', 'GITHUB_OUTPUT':str(root/'output')}
             subprocess.run(['bash', '-eo', 'pipefail', '-c', run], cwd=root, env=env, check=True)
-            threads = json.loads((root / '.auto-review/target/threads.json').read_text())
+            threads = json.loads((root / '.auto-reviewer/target/threads.json').read_text())
             self.assertEqual([t['thread_id'] for t in threads], ['t1', 't2'])
             self.assertEqual([c['databaseId'] for c in threads[0]['comments']], [1, 2])
             self.assertEqual(threads[0]['comments'][1]['authorAssociation'], 'MEMBER')
@@ -738,26 +762,18 @@ class ResolverRunTest(unittest.TestCase):
         result=self.resolve(); self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(len(self.mutations()),1)
 
-    def test_thread_root_is_found_with_old_and_new_badge_style(self):
-        for style in ('for-the-badge','flat-square'):
-            with self.subTest(style=style):
-                self.initial['thread']['comments'][0]['body']='![Important](https://img.shields.io/badge/Medium-C99A3A?style='+style+') R1-F1 - issue'
+    def test_thread_root_is_found_with_every_badge_style(self):
+        bodies = ['![Important](https://img.shields.io/badge/Medium-C99A3A?style=for-the-badge) R1-F1 - issue',
+                  '![Important](https://img.shields.io/badge/Medium-C99A3A?style=flat-square) R1-F1 - issue',
+                  r'$\color{orange}{\bigcirc}$ Medium R1-F1 - issue',
+                  r'$\color{orange}◎$ Medium R1-F1 - issue']
+        for body in bodies:
+            with self.subTest(body=body):
+                self.initial['thread']['comments'][0]['body']=body
                 self.prepare()
                 result=self.resolve(); self.assertEqual(result.returncode,0,result.stderr)
                 result=self.complete(); self.assertEqual(result.returncode,0,result.stderr)
                 self.assertNotIn('source thread is missing or ambiguous',result.stderr)
-
-    def test_thread_root_is_found_with_colored_circle(self):
-        self.initial['thread']['comments'][0]['body']=r'$\color{orange}{\bigcirc}$ Medium R1-F1 - issue'
-        self.prepare()
-        result=self.resolve(); self.assertEqual(result.returncode,0,result.stderr)
-        result=self.complete(); self.assertEqual(result.returncode,0,result.stderr)
-
-    def test_thread_root_is_found_with_concentric_circle(self):
-        self.initial['thread']['comments'][0]['body']=r'$\color{orange}◎$ Medium R1-F1 - issue'
-        self.prepare()
-        result=self.resolve(); self.assertEqual(result.returncode,0,result.stderr)
-        result=self.complete(); self.assertEqual(result.returncode,0,result.stderr)
 
     def test_addressed_and_already_resolved_any_actor(self):
         for actor in (None,'so-upstars','github-actions[bot]','other-human'):
@@ -963,14 +979,14 @@ USED_EXAMPLE = 'Used: `cr-request` <sup>[0.0.16](https://www.skills.sh/sentimony
 
 
 class PublicPresentationTest(unittest.TestCase):
-    def render(self, readiness='Ready', ref='v0.0.4', usage=True, reversed_footer=False, details='<details open><summary>Details</summary>', full=False, evidence='Full evidence.', extra_before='', extra_after=''):
+    def render(self, readiness='Ready', ref='v0.0.4', usage=True, reversed_footer=False, details='<details open><summary>Details</summary>', full=False, evidence='Full evidence.', extra_before='', extra_after='', row='| PASS | PASS | PASS | 0 | 0 | 0 |'):
         signature=f'Reviewed with: `auto-reviewer-shared.yaml` `{ref}` workflow · `cr-request` `v0.0.16` skill · In `0 min 49 sec`'
         if usage:
             signature+=' · `claude-sonnet-5-5` `medium` · `202,629 tokens` · `$0.1634`'
         footer=[signature,'Next step: `/verify -> /finalize squash`']
         if reversed_footer: footer.reverse()
         marker='<!-- claude-review sha='+('a'*40)+' -->'
-        table='| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | 0 | 0 | 0 |'
+        table='| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n'+row
         body=marker+'\n\n'+extra_before+table+'\n\n**Readiness:** '+readiness+'\n\n'+details+'\n\n'+evidence+'\n\n</details>\n\n'+extra_after+'\n'.join(footer)+'\n'
         script=step('Validate review body')
         fragment=script[script.index('# The Next step line loses'):script.index('# GitHub rejects review bodies over')]
@@ -980,7 +996,8 @@ class PublicPresentationTest(unittest.TestCase):
                  'LAST_LINE':footer[-1]}
             if full:
                 fake=root/'gh'
-                fake.write_text('#!/bin/sh\ncase "$2" in\n  */status[?]*) echo run-url ;;\n  */pulls/42) echo '+('a'*40)+' ;;\n  *) exit 2 ;;\nesac\n')
+                fake.write_text('#!/bin/sh\ncase "$2" in\n  */status[?]*) echo run-url ;;\n  */pulls/42) echo '+('a'*40)+' ;;\n'
+                                '  */statuses/*) echo "$*" >> '+str(root/'statuses')+' ;;\n  *) exit 2 ;;\nesac\n')
                 fake.chmod(0o755)
                 env.update(PATH=str(root)+os.pathsep+os.environ['PATH'],REPO='owner/repo',NUMBER='42',HEAD_SHA='a'*40,
                            RUN_URL='run-url',CONTEXT='Auto Reviewer',MARKER=marker,JOB_STATUS='success',REVIEW_RESULT='success',VERSION='0.0.16',
@@ -991,6 +1008,7 @@ class PublicPresentationTest(unittest.TestCase):
                 command='signature="$INTERNAL_SIGNATURE"; last="$LAST_LINE"\n'+fragment
             result=subprocess.run(['bash','-eo','pipefail','-c',command],env=env,capture_output=True,text=True)
             result.outputs=(root/'output').read_text() if (root/'output').exists() else ''
+            result.statuses=(root/'statuses').read_text() if (root/'statuses').exists() else ''
             return result,(root/'post').read_text() if (root/'post').exists() else '',marker,table
 
     def test_exact_requested_published_layout(self):
@@ -1153,21 +1171,34 @@ class FooterTest(unittest.TestCase):
                     self.assertEqual(result.returncode==0,signature in accepts,result.stderr)
 
 class ReadinessTest(unittest.TestCase):
-    def run_readiness(self, section):
-        script=step('Validate review body')
-        start=script.index('# Older reviews wrote the readiness')
-        end=script.index('summary="Critical')
-        fragment='fail() { echo FAIL; exit 1; }\ncritical=0; important=1; minor=2\n'+script[start:end]+'echo "$readiness"\n'
-        return subprocess.run(['bash','-c',fragment],env={**os.environ,'section':section},capture_output=True,text=True)
-
     def test_capitalised_and_legacy_lowercase_readiness_read_as_capitalised(self):
-        for line,expected in [('**Readiness:** Ready','Ready'),('**Readiness:** Ready with fixes','Ready with fixes'),
-                              ('**Readiness:** Not ready','Not ready'),('**Readiness:** ready','Ready'),
-                              ('**Readiness:** ready with fixes','Ready with fixes'),('**Readiness:** not ready','Not ready')]:
-            with self.subTest(line=line):
-                result=self.run_readiness('text\n'+line+'\n')
-                self.assertEqual(result.stdout.strip(),expected,result.stderr)
-        self.assertIn('FAIL',self.run_readiness('**Readiness:** Almost\n').stdout)
+        presentation=PublicPresentationTest()
+        for readiness,expected,state in [('Ready','Ready','success'),('Ready with fixes','Ready with fixes','success'),
+                                         ('Not ready','Not ready','failure'),('ready','Ready','success'),
+                                         ('ready with fixes','Ready with fixes','success'),('not ready','Not ready','failure')]:
+            with self.subTest(readiness=readiness):
+                result,_,_,_=presentation.render(readiness=readiness,full=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn('summary=Critical 0, Important 0, Minor 0; '+expected+'\n',result.outputs)
+                self.assertIn('state='+state+'\n',result.outputs)
+        result,body,_,_=presentation.render(readiness='Almost',full=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(body,'')
+
+    def test_summary_row_counts_and_strict_grammar(self):
+        presentation=PublicPresentationTest()
+        result,_,_,_=presentation.render(row='| FINDINGS | PASS | UNASSESSED | 1 | 2 | 3 |',full=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('summary=Critical 1, Important 2, Minor 3; Ready\n',result.outputs)
+        self.assertIn('state=failure\n',result.outputs)
+        for row in ('| PASS | PASS | OK | 0 | 0 | 0 |','| PASS | PASS | PASS | 0 | 0 | x |','| PASS | PASS | PASS | 0 | 0 |'):
+            with self.subTest(row=row):
+                result,body,_,_=presentation.render(row=row,full=True)
+                self.assertNotEqual(result.returncode,0)
+                self.assertEqual(body,'')
+                self.assertNotIn('ready_to_post',result.outputs)
+                self.assertIn('state=failure',result.statuses)
+                self.assertIn('description=The review has no valid Summary table',result.statuses)
 
     def test_prompt_and_state_use_capitalised_readiness(self):
         text=WORKFLOW.read_text(encoding='utf-8')
@@ -1210,16 +1241,16 @@ class WorkflowIdentityTest(unittest.TestCase):
 class UsageRecordTest(unittest.TestCase):
     def run_duration(self, execution, model='claude-sonnet-5-5', effort='medium', raw=None, version='0.0.11', elapsed=125, workflow_ref='v0.0.3'):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); (root/'.auto-review').mkdir()
+            root=Path(tmp); (root/'.auto-reviewer').mkdir()
             sig=f'Reviewed with: `auto-reviewer-shared.yaml` `{workflow_ref}` workflow · `cr-request` `v{version}` skill'
-            (root/'.auto-review/review.md').write_text('<!-- m -->\nbody\n\n'+sig+'\nNext step: `/cr-received PR #1`\n')
+            (root/'.auto-reviewer/review.md').write_text('<!-- m -->\nbody\n\n'+sig+'\nNext step: `/cr-received PR #1`\n')
             env={**os.environ,'START':'0','SIGNATURE':sig,'SEP':' · ','USAGE_MODEL':model,'USAGE_EFFORT':effort}
             if execution is not None:
                 (root/'exec.json').write_text(raw if raw is not None else json.dumps(execution)); env['EXEC_FILE']=str(root/'exec.json')
             run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))',f'elapsed={elapsed}')
             result=subprocess.run(['bash','-eo','pipefail','-c',run],cwd=root,env=env,capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
-            return (root/'.auto-review/review.md').read_text().splitlines()[-2]
+            return (root/'.auto-reviewer/review.md').read_text().splitlines()[-2]
 
     def test_usage_is_appended_to_the_signature(self):
         result={'type':'result','total_cost_usd':0.43215,'usage':{'input_tokens':100,'output_tokens':20,'cache_creation_input_tokens':3,'cache_read_input_tokens':900},'modelUsage':{}}
@@ -1246,7 +1277,7 @@ class TokenFilterTest(unittest.TestCase):
     def test_atlassian_prefix_is_blocked_in_every_transport(self):
         script=step('Validate review body')
         start=script.index("if grep -qE '")
-        end=script.index('# The one-row Summary table:',start)
+        end=script.index('summary="Critical',start)
         fragment='fail() { exit 1; }\n'+script[start:end]
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
@@ -1286,7 +1317,7 @@ class DecodedTokenFilterTest(unittest.TestCase):
     def test_escaped_prefixes_and_malformed_json_are_rejected(self):
         script=step('Validate review body')
         start=script.index("if grep -qE '")
-        end=script.index('# The one-row Summary table:',start)
+        end=script.index('summary="Critical',start)
         fragment='fail() { exit 1; }\n'+script[start:end]
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
@@ -2111,88 +2142,83 @@ class ReviewModelTest(unittest.TestCase):
                 self.assertEqual(output,'')
 
 
-class ReviewSkillLayoutTest(unittest.TestCase):
-    def run_layout(self, layouts, empty=False, zero_byte=False, detail=False, link=None):
-        import shutil
+class ReviewSkillInstallTest(unittest.TestCase):
+    # Fake npx installs a tree chosen by INSTALL; fake git lists release tags.
+    NPX = """#!/bin/sh
+printf '%s\\n' "$@" > "$ROOT/npx_args"
+skill="$HOME/.claude/skills/cr-request"
+mkdir -p "$HOME/.claude/skills" "$ROOT/outside"
+printf -- '---\\nmetadata:\\n  version: "9.9.9"\\n---\\n' > "$ROOT/outside/SKILL.md"
+case "$INSTALL" in
+  none) ;;
+  dirlink) ln -s "$ROOT/outside" "$skill" ;;
+  filelink) mkdir -p "$skill"; ln -s "$ROOT/outside/SKILL.md" "$skill/SKILL.md" ;;
+  empty) mkdir -p "$skill"; : > "$skill/SKILL.md" ;;
+  noversion) mkdir -p "$skill"; printf -- '---\\nname: cr-request\\n---\\n' > "$skill/SKILL.md" ;;
+  *) mkdir -p "$skill"; printf -- '---\\nmetadata:\\n  version: "0.0.11"\\n---\\n' > "$skill/SKILL.md" ;;
+esac
+"""
+    GIT = """#!/bin/sh
+printf '%s\\trefs/tags/v0.0.9\\n%s\\trefs/tags/v0.0.10\\n%s\\trefs/tags/latest\\n' \\
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccccccccccccccccccccc
+"""
+
+    def install(self, mode='ok', ref=''):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            home = root / 'home'
-            home.mkdir()
-            for layout in layouts:
-                skill = root / 'aw' / layout / 'cr-request'
-                skill.mkdir(parents=True)
-                if empty:
-                    continue
-                if zero_byte:
-                    (skill / 'SKILL.md').touch()
-                    continue
-                (skill / 'SKILL.md').write_text('---\nmetadata:\n  version: "0.0.11"\n---\n')
-            if link:
-                outside = root / 'outside' / 'cr-request'
-                outside.mkdir(parents=True)
-                (outside / 'SKILL.md').write_text('---\nmetadata:\n  version: "9.9.9"\n---\n')
-                if link == 'source':
-                    (root / 'aw' / 'skills').mkdir(parents=True)
-                    (root / 'aw' / 'skills' / 'cr-request').symlink_to(outside)
-                elif link == 'parent':
-                    (root / 'aw').mkdir()
-                    (root / 'aw' / 'skills').symlink_to(outside.parent)
-                elif link == 'file':
-                    skill = root / 'aw' / 'skills' / 'cr-request'
-                    skill.mkdir(parents=True)
-                    (skill / 'SKILL.md').symlink_to(outside / 'SKILL.md')
-            child_bin = root / 'bin'
-            child_bin.mkdir()
-            for name in ('mkdir', 'cp', 'sed', 'head', 'realpath', 'find'):
-                (child_bin / name).symlink_to(shutil.which(name))
-            self.assertIsNone(shutil.which('claude', path=str(child_bin)))
-            self.assertIsNone(shutil.which('codex', path=str(child_bin)))
-            source = step('Install cr-request skill')
-            source = source[source.index('mkdir -p ~/.claude/skills'):]
-            result = subprocess.run(['/bin/bash', '-e', '-c', source], cwd=root,
-                                    env={'HOME': str(home), 'PATH': str(child_bin),
-                                         'RUNNER_TEMP': str(root),
-                                         'GITHUB_OUTPUT': str(root / 'output')},
-                                    capture_output=True, text=True)
-            return result if detail else result.returncode
+            (root / 'home').mkdir()
+            for name, body in (('npx', self.NPX), ('git', self.GIT)):
+                (root / name).write_text(body)
+                (root / name).chmod(0o755)
+            env = {**os.environ, 'HOME': str(root / 'home'), 'ROOT': str(root), 'INSTALL': mode,
+                   'PATH': str(root) + os.pathsep + os.environ['PATH'], 'REVIEW_SKILLS_REF': ref,
+                   'SOURCE': 'https://github.com/sentimony/agentic-workflow',
+                   'GITHUB_OUTPUT': str(root / 'output')}
+            result = subprocess.run(['bash', '-e', '-c', step('Install cr-request skill')], cwd=root,
+                                    env=env, capture_output=True, text=True)
+            args = (root / 'npx_args').read_text().splitlines() if (root / 'npx_args').exists() else []
+            output = (root / 'output').read_text() if (root / 'output').exists() else ''
+            return result, args, output
 
-    def test_root_layout(self):
-        self.assertEqual(self.run_layout(['skills']), 0)
+    def test_latest_release_tag_is_installed_through_skl_x(self):
+        result, args, output = self.install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(args, ['-y', '--prefer-online', 'skl-x@latest', 'add',
+                                'https://github.com/sentimony/agentic-workflow/tree/v0.0.10',
+                                '-s', 'cr-request', '-a', 'claude-code', '-g', '-y', '-m', 'sm'])
+        self.assertEqual(output, 'version=0.0.11\n')
 
-    def test_historical_layout(self):
-        self.assertEqual(self.run_layout(['plugins/aw/skills']), 0)
+    def test_pinned_commit_is_installed(self):
+        result, args, _ = self.install(ref='d' * 40)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('https://github.com/sentimony/agentic-workflow/tree/' + 'd' * 40, args)
 
-    def test_missing_source(self):
-        self.assertNotEqual(self.run_layout([]), 0)
-
-    def test_missing_skill_file(self):
-        self.assertNotEqual(self.run_layout(['skills'], empty=True), 0)
-
-    def test_zero_byte_skill_file(self):
-        result = self.run_layout(['skills'], zero_byte=True, detail=True)
+    def test_invalid_pin_installs_nothing(self):
+        result, args, _ = self.install(ref='main')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('no SKILL.md or it is empty', result.stdout)
+        self.assertIn('must be a full commit SHA', result.stdout)
+        self.assertEqual(args, [])
 
-    def assert_link_rejected(self, link, message):
-        result = self.run_layout([], link=link, detail=True)
+    def assert_rejected(self, mode, message):
+        result, _, output = self.install(mode)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(message, result.stdout)
+        self.assertEqual(output, '')
 
-    def test_symlinked_source_rejected(self):
-        self.assert_link_rejected('source', 'resolves outside the fetched checkout')
+    def test_missing_skill_rejected(self):
+        self.assert_rejected('none', 'not installed as a directory')
 
-    def test_symlinked_layout_parent_rejected(self):
-        self.assert_link_rejected('parent', 'resolves outside the fetched checkout')
+    def test_symlinked_skill_rejected(self):
+        self.assert_rejected('dirlink', 'not installed as a directory')
 
     def test_symlinked_skill_file_rejected(self):
-        self.assert_link_rejected('file', 'contains a symbolic link')
+        self.assert_rejected('filelink', 'contains a symbolic link')
 
-    def test_multiple_historical_sources(self):
-        self.assertNotEqual(self.run_layout(['plugins/aw/skills', 'plugins/awf/skills']), 0)
+    def test_zero_byte_skill_file_rejected(self):
+        self.assert_rejected('empty', 'no SKILL.md or it is empty')
 
-    def test_ambiguous_sources(self):
-        self.assertNotEqual(self.run_layout(['skills', 'plugins/aw/skills']), 0)
-
+    def test_missing_version_rejected(self):
+        self.assert_rejected('noversion', 'No version in the cr-request SKILL.md')
 
 if __name__ == '__main__':
     unittest.main()

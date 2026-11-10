@@ -1982,6 +1982,9 @@ jobs:
                           else 'No source thread; no thread action requested' if thread is None else None)})
               # The first PUT and readback are a capability check on this exact review.
               persist(d)
+              # Issues are listed once per run: each finding has its own marker, so an issue
+              # this loop creates never matches a later finding.
+              issue_list=None
               for (f,initial,root), progress in zip(mapped,d['action_progress']):
                   accepted=f['defer_decision']=='ACCEPTED'
                   if initial is None or (not accepted and f['status']!='ADDRESSED'): continue
@@ -1992,7 +1995,8 @@ jobs:
                   try:
                       if accepted:
                           operation='issue'
-                          existing=[x for x in pages(f'{prefix}/issues?state=all') if 'pull_request' not in x and (x.get('user') or {}).get('login')==reviewer and marker in (x.get('body') or '')]
+                          if issue_list is None: issue_list=pages(f'{prefix}/issues?state=all')
+                          existing=[x for x in issue_list if 'pull_request' not in x and (x.get('user') or {}).get('login')==reviewer and marker in (x.get('body') or '')]
                           require(len(existing)<=1,'ambiguous deferred issues')
                           if initial['isResolved']:
                               completed_replies=[c for c in initial['comments'][1:] if marker in c.get('body','') and (c.get('author') or {}).get('login')==reviewer]

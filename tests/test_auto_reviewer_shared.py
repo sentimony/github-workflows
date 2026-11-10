@@ -179,6 +179,9 @@ class ResolverBoundaryTest(unittest.TestCase):
         self.assertIn('resolve_threads',jobs['complete']['needs'])
         # Footer/ledger fixtures exercise the same script in both trusted phases.
         self.assertEqual(step('Publish review actions'),step('Complete review actions'))
+        # Both jobs report a failure that left the status pending the same way.
+        self.assertEqual(step('Finalize failed publication'),step('Report an unexpected failure'))
+        self.assertIn('Publishing the review failed',step('Report an unexpected failure'))
 
 
 class PrepareThreadsTest(unittest.TestCase):

@@ -16,6 +16,9 @@ per workflow, newest first.
    with the same strict row grammar. The inline comments and review actions JSON are
    checked for token-like strings only after decoding, and invalid JSON now sets a failure
    status.
+4. Smaller cleanups: one failure reporter shared by the publish and complete jobs, no
+   duplicate `is_positive`/`nonempty` helpers or nested `datetime` import, and one
+   `Reviewed with:` prefix pattern in the merged summary.
 
 ## v0.0.4 - 2026-11-10
 

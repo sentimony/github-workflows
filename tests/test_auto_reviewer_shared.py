@@ -2150,88 +2150,83 @@ class ReviewModelTest(unittest.TestCase):
                 self.assertEqual(output,'')
 
 
-class ReviewSkillLayoutTest(unittest.TestCase):
-    def run_layout(self, layouts, empty=False, zero_byte=False, detail=False, link=None):
-        import shutil
+class ReviewSkillInstallTest(unittest.TestCase):
+    # Fake npx installs a tree chosen by INSTALL; fake git lists release tags.
+    NPX = """#!/bin/sh
+printf '%s\\n' "$@" > "$ROOT/npx_args"
+skill="$HOME/.claude/skills/cr-request"
+mkdir -p "$HOME/.claude/skills" "$ROOT/outside"
+printf -- '---\\nmetadata:\\n  version: "9.9.9"\\n---\\n' > "$ROOT/outside/SKILL.md"
+case "$INSTALL" in
+  none) ;;
+  dirlink) ln -s "$ROOT/outside" "$skill" ;;
+  filelink) mkdir -p "$skill"; ln -s "$ROOT/outside/SKILL.md" "$skill/SKILL.md" ;;
+  empty) mkdir -p "$skill"; : > "$skill/SKILL.md" ;;
+  noversion) mkdir -p "$skill"; printf -- '---\\nname: cr-request\\n---\\n' > "$skill/SKILL.md" ;;
+  *) mkdir -p "$skill"; printf -- '---\\nmetadata:\\n  version: "0.0.11"\\n---\\n' > "$skill/SKILL.md" ;;
+esac
+"""
+    GIT = """#!/bin/sh
+printf '%s\\trefs/tags/v0.0.9\\n%s\\trefs/tags/v0.0.10\\n%s\\trefs/tags/latest\\n' \\
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccccccccccccccccccccc
+"""
+
+    def install(self, mode='ok', ref=''):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            home = root / 'home'
-            home.mkdir()
-            for layout in layouts:
-                skill = root / 'aw' / layout / 'cr-request'
-                skill.mkdir(parents=True)
-                if empty:
-                    continue
-                if zero_byte:
-                    (skill / 'SKILL.md').touch()
-                    continue
-                (skill / 'SKILL.md').write_text('---\nmetadata:\n  version: "0.0.11"\n---\n')
-            if link:
-                outside = root / 'outside' / 'cr-request'
-                outside.mkdir(parents=True)
-                (outside / 'SKILL.md').write_text('---\nmetadata:\n  version: "9.9.9"\n---\n')
-                if link == 'source':
-                    (root / 'aw' / 'skills').mkdir(parents=True)
-                    (root / 'aw' / 'skills' / 'cr-request').symlink_to(outside)
-                elif link == 'parent':
-                    (root / 'aw').mkdir()
-                    (root / 'aw' / 'skills').symlink_to(outside.parent)
-                elif link == 'file':
-                    skill = root / 'aw' / 'skills' / 'cr-request'
-                    skill.mkdir(parents=True)
-                    (skill / 'SKILL.md').symlink_to(outside / 'SKILL.md')
-            child_bin = root / 'bin'
-            child_bin.mkdir()
-            for name in ('mkdir', 'cp', 'sed', 'head', 'realpath', 'find'):
-                (child_bin / name).symlink_to(shutil.which(name))
-            self.assertIsNone(shutil.which('claude', path=str(child_bin)))
-            self.assertIsNone(shutil.which('codex', path=str(child_bin)))
-            source = step('Install cr-request skill')
-            source = source[source.index('mkdir -p ~/.claude/skills'):]
-            result = subprocess.run(['/bin/bash', '-e', '-c', source], cwd=root,
-                                    env={'HOME': str(home), 'PATH': str(child_bin),
-                                         'RUNNER_TEMP': str(root),
-                                         'GITHUB_OUTPUT': str(root / 'output')},
-                                    capture_output=True, text=True)
-            return result if detail else result.returncode
+            (root / 'home').mkdir()
+            for name, body in (('npx', self.NPX), ('git', self.GIT)):
+                (root / name).write_text(body)
+                (root / name).chmod(0o755)
+            env = {**os.environ, 'HOME': str(root / 'home'), 'ROOT': str(root), 'INSTALL': mode,
+                   'PATH': str(root) + os.pathsep + os.environ['PATH'], 'REVIEW_SKILLS_REF': ref,
+                   'SOURCE': 'https://github.com/sentimony/agentic-workflow',
+                   'GITHUB_OUTPUT': str(root / 'output')}
+            result = subprocess.run(['bash', '-e', '-c', step('Install cr-request skill')], cwd=root,
+                                    env=env, capture_output=True, text=True)
+            args = (root / 'npx_args').read_text().splitlines() if (root / 'npx_args').exists() else []
+            output = (root / 'output').read_text() if (root / 'output').exists() else ''
+            return result, args, output
 
-    def test_root_layout(self):
-        self.assertEqual(self.run_layout(['skills']), 0)
+    def test_latest_release_tag_is_installed_through_skl_x(self):
+        result, args, output = self.install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(args, ['-y', '--prefer-online', 'skl-x@latest', 'add',
+                                'https://github.com/sentimony/agentic-workflow/tree/v0.0.10',
+                                '-s', 'cr-request', '-a', 'claude-code', '-g', '-y', '-m', 'sm'])
+        self.assertEqual(output, 'version=0.0.11\n')
 
-    def test_historical_layout(self):
-        self.assertEqual(self.run_layout(['plugins/aw/skills']), 0)
+    def test_pinned_commit_is_installed(self):
+        result, args, _ = self.install(ref='d' * 40)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('https://github.com/sentimony/agentic-workflow/tree/' + 'd' * 40, args)
 
-    def test_missing_source(self):
-        self.assertNotEqual(self.run_layout([]), 0)
-
-    def test_missing_skill_file(self):
-        self.assertNotEqual(self.run_layout(['skills'], empty=True), 0)
-
-    def test_zero_byte_skill_file(self):
-        result = self.run_layout(['skills'], zero_byte=True, detail=True)
+    def test_invalid_pin_installs_nothing(self):
+        result, args, _ = self.install(ref='main')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('no SKILL.md or it is empty', result.stdout)
+        self.assertIn('must be a full commit SHA', result.stdout)
+        self.assertEqual(args, [])
 
-    def assert_link_rejected(self, link, message):
-        result = self.run_layout([], link=link, detail=True)
+    def assert_rejected(self, mode, message):
+        result, _, output = self.install(mode)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(message, result.stdout)
+        self.assertEqual(output, '')
 
-    def test_symlinked_source_rejected(self):
-        self.assert_link_rejected('source', 'resolves outside the fetched checkout')
+    def test_missing_skill_rejected(self):
+        self.assert_rejected('none', 'not installed as a directory')
 
-    def test_symlinked_layout_parent_rejected(self):
-        self.assert_link_rejected('parent', 'resolves outside the fetched checkout')
+    def test_symlinked_skill_rejected(self):
+        self.assert_rejected('dirlink', 'not installed as a directory')
 
     def test_symlinked_skill_file_rejected(self):
-        self.assert_link_rejected('file', 'contains a symbolic link')
+        self.assert_rejected('filelink', 'contains a symbolic link')
 
-    def test_multiple_historical_sources(self):
-        self.assertNotEqual(self.run_layout(['plugins/aw/skills', 'plugins/awf/skills']), 0)
+    def test_zero_byte_skill_file_rejected(self):
+        self.assert_rejected('empty', 'no SKILL.md or it is empty')
 
-    def test_ambiguous_sources(self):
-        self.assertNotEqual(self.run_layout(['skills', 'plugins/aw/skills']), 0)
-
+    def test_missing_version_rejected(self):
+        self.assert_rejected('noversion', 'No version in the cr-request SKILL.md')
 
 if __name__ == '__main__':
     unittest.main()

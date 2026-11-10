@@ -14,9 +14,15 @@ The runner installs Claude Code from the native `latest` channel on each review 
 checks that executable with `--version`, records the version in the step summary,
 and passes its path to the pinned
 `anthropics/claude-code-action`. The CLI version can change between runs; the action SHA
-and the released-tag/SHA skill installer remain unchanged. Installation retries up to
-three times and stops the review if every attempt fails. The review duration starts
-after installation and immediately before inference.
+remains unchanged. Installation retries up to three times and stops the review if every
+attempt fails. The review duration starts after installation and immediately before
+inference.
+
+The cr-request skill is installed with `npx -y --prefer-online skl-x@latest add
+<source>/tree/<ref> -s cr-request -a claude-code -g -y -m sm`, using the runner's Node.
+The `skl-x` version moves with each release; the skill itself comes from the newest
+`vX.Y.Z` tag of `sentimony/agentic-workflow` or the `REVIEW_SKILLS_REF` commit, must
+install as a plain directory without symbolic links, and must name its version.
 
 Published comments show readiness first, then the verdict table, a collapsed Details
 block, and a Used footer. The footer links skill and workflow versions in superscript,

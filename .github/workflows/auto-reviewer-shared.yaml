@@ -827,6 +827,7 @@ jobs:
       # vX.Y.Z tag, so the signature names the latest released cr-request, unless the
       # REVIEW_SKILLS_REF repo variable pins a full commit SHA.
       # Latest-release lookup preserves the requested upstream behavior; use the variable for a pin.
+      # Owner accepts the moving skl-x@latest installer; the /tree/<ref> source keeps the skill pinned.
       - name: Install cr-request skill
         id: skill
         env:
@@ -838,32 +839,18 @@ jobs:
             ref="$REVIEW_SKILLS_REF"
           else
             ref=$(git ls-remote --tags --refs "$SOURCE" \
-              | sed -nE 's#^[0-9a-f]{40}[[:space:]]+(refs/tags/v[0-9]+\.[0-9]+\.[0-9]+)$#\1#p' | sort -V | tail -n 1)
+              | sed -nE 's#^[0-9a-f]{40}[[:space:]]+refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+)$#\1#p' | sort -V | tail -n 1)
             test -n "$ref" || { echo "::error::No vX.Y.Z tag in $SOURCE"; exit 1; }
           fi
           echo "cr-request source: $ref"
-          git init -q "$RUNNER_TEMP/aw"
-          git -C "$RUNNER_TEMP/aw" fetch -q --depth 1 "$SOURCE" "$ref"
-          git -C "$RUNNER_TEMP/aw" checkout -q FETCH_HEAD
-          mkdir -p ~/.claude/skills .auto-review
-          # Released pins can use either the root layout or a historical plugin directory.
-          shopt -s nullglob
-          candidates=("$RUNNER_TEMP"/aw/skills/cr-request "$RUNNER_TEMP"/aw/plugins/*/skills/cr-request)
-          sources=()
-          for candidate in "${candidates[@]}"; do
-            if [ -d "$candidate" ]; then
-              sources+=("$candidate")
-            fi
-          done
-          [ "${#sources[@]}" -eq 1 ] || { echo "::error::Expected exactly one cr-request source"; exit 1; }
-          # The installed tree must come from the fetched revision: no link may lead outside it.
-          checkout=$(realpath "$RUNNER_TEMP/aw")
-          case "$(realpath "${sources[0]}")" in "$checkout"/*) ;; *) echo "::error::cr-request source resolves outside the fetched checkout"; exit 1 ;; esac
-          [ -z "$(find "${sources[0]}" -type l -print -quit)" ] || { echo "::error::cr-request source contains a symbolic link"; exit 1; }
-          test -s "${sources[0]}/SKILL.md" || { echo "::error::cr-request source has no SKILL.md or it is empty"; exit 1; }
-          cp -R "${sources[0]}" ~/.claude/skills/
-          test -f ~/.claude/skills/cr-request/SKILL.md
-          version="$(sed -nE 's/^[[:space:]]+version:[[:space:]]*"?([0-9][0-9.]*)"?[[:space:]]*$/\1/p' ~/.claude/skills/cr-request/SKILL.md | head -n 1)"
+          npx -y --prefer-online skl-x@latest add "$SOURCE/tree/$ref" -s cr-request -a claude-code -g -y -m sm
+          mkdir -p .auto-review
+          skill=~/.claude/skills/cr-request
+          # The installed skill must be a plain copy: no link may lead outside it.
+          [ -d "$skill" ] && [ ! -L "$skill" ] || { echo "::error::cr-request is not installed as a directory"; exit 1; }
+          [ -z "$(find "$skill" -type l -print -quit)" ] || { echo "::error::cr-request contains a symbolic link"; exit 1; }
+          test -s "$skill/SKILL.md" || { echo "::error::cr-request has no SKILL.md or it is empty"; exit 1; }
+          version="$(sed -nE 's/^[[:space:]]+version:[[:space:]]*"?([0-9][0-9.]*)"?[[:space:]]*$/\1/p' "$skill/SKILL.md" | head -n 1)"
           test -n "$version" || { echo "::error::No version in the cr-request SKILL.md"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 

@@ -70,7 +70,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(set(workflow['jobs']), {'auto_review'})
         job = workflow['jobs']['auto_review']
         self.assertEqual(job['uses'],
-                         'sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.4')
+                         'sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.5')
         self.assertNotIn('concurrency', job)
         self.assertEqual(job['secrets']['AUTO_REVIEWER_YNGWALD'],
                          '${{ secrets.AUTO_REVIEWER_YNGWALD }}')
@@ -156,7 +156,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(len(examples), 2)
         for example, expected in zip(examples, ('validate', 'check')):
             with self.subTest(expected=expected):
-                self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.4\n', example + '\n')
+                self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.5\n', example + '\n')
                 self.assertIn('AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', example + '\n')
                 result = self.check(caller=example, expected=expected)
                 self.assertEqual(result.returncode, 0, result.stderr)

@@ -12,6 +12,10 @@
 2. `.github/workflows/auto-reviewer.yaml` - this repository's own caller, pinned to the
    last released tag.
 3. `.github/workflows/ci.yml` - the `validate` job: the unit tests and a pinned actionlint.
+   `.github/workflows/skl-x-live.yml` runs `tests/test_skl_x_live.py` with
+   `AUTO_REVIEWER_LIVE=1` (weekly, on dispatch and on PRs that change the install step):
+   the real skl-x install compared with `git archive`. Without the variable the test is
+   skipped, so `validate` stays offline.
 4. `scripts/check_auto_reviewer_shared_contract.py` - the caller/callee contract checker
    (Ruby 3 or later).
 5. `tests/` - `step(name)` in `tests/test_auto_reviewer_shared.py` runs a step's real

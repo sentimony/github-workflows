@@ -61,7 +61,7 @@ configuration validation still applies.
 
 ### Callers
 
-Callers target `auto-reviewer-shared.yaml@v0.0.4`. Publish that tag before using these examples; GitHub cannot
+Callers target `auto-reviewer-shared.yaml@v0.0.5`. Publish that tag before using these examples; GitHub cannot
 resolve a reusable workflow at a tag that does not yet exist.
 `workflow_run` uses the caller workflow
 definition on its default branch; pull request events use the PR branch copy.
@@ -72,7 +72,7 @@ Release tags are immutable: a published tag never moves. Changes between tags ar
 in [CHANGELOG.md](CHANGELOG.md).
 
 This repository's `.github/workflows/auto-reviewer.yaml`, named `Auto Reviewer`,
-targets `.github/workflows/auto-reviewer-shared.yaml@v0.0.4` with the `validate`
+targets `.github/workflows/auto-reviewer-shared.yaml@v0.0.5` with the `validate`
 CI job. The reusable workflow is named `Auto Reviewer (Shared)`.
 
 Configure Actions secrets in each consumer repository:
@@ -122,7 +122,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.4
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.5
     with:
       required-ci-job: validate
       pr: ${{ inputs.pr || '' }}
@@ -158,7 +158,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.4
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.5
     with:
       required-ci-job: check
       pr: ${{ inputs.pr || '' }}
@@ -172,7 +172,8 @@ jobs:
 ## Offline checks
 
 From the repository root, run `python3 -m unittest discover -s tests -p 'test_*.py'` and
-`actionlint .github/workflows/*.yaml .github/workflows/*.yml`. To validate a caller
+`actionlint .github/workflows/*.yaml .github/workflows/*.yml`. The live skl-x install
+test needs the network and runs only with `AUTO_REVIEWER_LIVE=1`. To validate a caller
 against this checkout, run:
 
 ```sh

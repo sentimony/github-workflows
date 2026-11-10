@@ -10,14 +10,28 @@ The reusable workflow posts Claude reviews for eligible pull requests after CI. 
 workflow; `required-ci-job` names the CI job checked by the gate. These are separate
 names.
 
+The runner installs Claude Code from the native `latest` channel on each review run,
+checks that executable with `--version`, records the version in the step summary,
+and passes its path to the pinned
+`anthropics/claude-code-action`. The CLI version can change between runs; the action SHA
+and the released-tag/SHA skill installer remain unchanged. Installation retries up to
+three times and stops the review if every attempt fails. The review duration starts
+after installation and immediately before inference.
+
+Published comments show readiness first, then the verdict table, a collapsed Details
+block, and a Used footer. The footer links skill and workflow versions in superscript,
+groups model and effort, and shows measured duration, tokens and cost. The public
+comment omits Next step; the reviewer's internal draft retains its validated contract.
+History and cycle summaries continue to read earlier review formats.
+
 ### Contract
 
 1. `required-ci-job` is a required string. It must match `[A-Za-z_][A-Za-z0-9_-]*`.
-2. `pr` and `pr_number` are optional strings with empty defaults for manual dispatch.
+2. `pr` is the only optional PR-number string, with an empty default for manual dispatch.
 3. The unreleased source requires secret inputs `AUTO_REVIEWER_YNGWALD` and
    `CLAUDE_CODE_OAUTH_TOKEN`, each bound to the repository secret of the same name.
    The old `YNGWALD_PR_TOKEN` input is removed from the source contract. The caller
-   examples target the upcoming `v0.0.3` release described under [Callers](#callers).
+   examples target the upcoming `v0.0.4` release described under [Callers](#callers).
    Secret names alone do not guarantee nonempty values for fork or bot events. Existing
    eligibility guards remain in place; live startup validation of secret availability
    remains a gap.
@@ -43,7 +57,7 @@ configuration validation still applies.
 
 ### Callers
 
-Callers target `v0.0.3`. Publish that tag before using these examples; GitHub cannot
+Callers target `auto-reviewer-shared.yaml@v0.0.4`. Publish that tag before using these examples; GitHub cannot
 resolve a reusable workflow at a tag that does not yet exist.
 `workflow_run` uses the caller workflow
 definition on its default branch; pull request events use the PR branch copy.
@@ -54,8 +68,11 @@ Release tags are immutable: never move or recreate one. For later changes, creat
 patch tag on the merged central commit, push it to origin, confirm it resolves, and
 update callers to that exact tag before merging their changes.
 
-This repository's `.github/workflows/self-auto-reviewer.yaml`, named `Self Auto Reviewer`,
-targets `.github/workflows/auto-reviewer.yaml@v0.0.3` with the `validate` CI job.
+This repository's `.github/workflows/auto-reviewer.yaml`, named `Auto Reviewer`,
+targets `.github/workflows/auto-reviewer-shared.yaml@v0.0.4` with the `validate`
+CI job. The reusable workflow is named `Auto Reviewer (Shared)`. The caller requires
+the published `v0.0.4` tag; the preceding review phase used the released `v0.0.3`
+workflow to review the proposed changes, which does not prove the new engine's runtime.
 Configure Actions secrets in each consumer repository:
 
 1. Create `AUTO_REVIEWER_YNGWALD` and `CLAUDE_CODE_OAUTH_TOKEN`, with separate token
@@ -75,7 +92,7 @@ they do not need a repository secret named `YNGWALD_PR_TOKEN`.
 
 CI runs on branch pushes, pull requests, and manual dispatch. Tag pushes do not trigger it.
 
-The [transport contract](AUTO_REVIEWER_TRANSPORT.md) defines the review draft, ledger,
+The [transport contract](AUTO_REVIEWER_SHARED_TRANSPORT.md) defines the review draft, ledger,
 and host actions.
 
 Agentic workflow (`validate`):
@@ -94,10 +111,6 @@ on:
         description: PR number
         required: false
         type: string
-      pr_number:
-        description: Legacy PR number
-        required: false
-        type: string
 permissions:
   actions: read
   contents: write
@@ -106,11 +119,10 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.3
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.4
     with:
       required-ci-job: validate
       pr: ${{ inputs.pr || '' }}
-      pr_number: ${{ inputs.pr_number || '' }}
     secrets:
       AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -132,10 +144,6 @@ on:
         description: PR number
         required: false
         type: string
-      pr_number:
-        description: Legacy PR number
-        required: false
-        type: string
 permissions:
   actions: read
   contents: write
@@ -144,11 +152,10 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer.yaml@v0.0.3
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.4
     with:
       required-ci-job: check
       pr: ${{ inputs.pr || '' }}
-      pr_number: ${{ inputs.pr_number || '' }}
     secrets:
       AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -161,7 +168,7 @@ From the repository root, run `python3 -m unittest discover -s tests -p 'test_*.
 against this checkout, run:
 
 ```sh
-python3 scripts/check_auto_reviewer_contract.py --workflow .github/workflows/auto-reviewer.yaml --caller path/to/caller.yaml --required-ci-job validate
+python3 scripts/check_auto_reviewer_shared_contract.py --workflow .github/workflows/auto-reviewer-shared.yaml --caller path/to/caller.yaml --required-ci-job validate
 ```
 
 Use `check` for the SoundCloud caller. The checker needs Ruby 3 or later; set `RUBY` to

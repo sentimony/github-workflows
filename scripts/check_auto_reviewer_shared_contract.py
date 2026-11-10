@@ -69,6 +69,7 @@ def check(central, caller, expected):
     candidates = [job for job in jobs.values() if isinstance(job, dict) and 'uses' in job]
     require(len(candidates) == 1, 'caller must have one reusable workflow job')
     job = candidates[0]
+    # Caller tests own exact uses paths/pins; this checker compares schemas and permissions.
     values = mapping(job.get('with', {}), 'caller inputs must be explicit')
     bindings = mapping(job.get('secrets', {}), 'caller secrets must be explicit')
     require(not (set(values) - set(inputs)), 'unknown caller input')

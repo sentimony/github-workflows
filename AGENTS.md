@@ -31,7 +31,8 @@ against `.github/workflows/auto-reviewer.yaml` with `--required-ci-job validate`
 1. Branches are `YYMMDDHHMM-dev-session`; PRs are squash-merged, and the PR title becomes
    the commit title. Merging and tagging happen only on the owner's explicit request.
 2. Record every change in `CHANGELOG.md` under the next patch tag's `## vX.Y.Z` heading;
-   the date is added when tagging. Tags are immutable and versions take patch bumps.
+   the date is added when tagging. Versions take patch bumps. A release tag goes on the
+   merged commit in `main`, is pushed to origin and checked to resolve; tags never move.
 3. A PR that changes the reusable workflow leaves the own caller on the previous released
    tag, so the released version reviews and summarizes it. Move the caller to the new tag
    in a separate PR after tagging.

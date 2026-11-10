@@ -11,9 +11,9 @@ per workflow, newest first.
    `Publish review actions` script through a YAML anchor, and `PHASE` still selects
    PREPARE or COMPLETE behavior. The workflow shrinks by 468 lines.
 2. The helpers shared by the merged summary and the review actions scripts (API access,
-   ledger validation, thread lookup and disposition markers) are defined once: a
-   `Write review helpers` step writes them as a module to `$RUNNER_TEMP`, and both scripts
-   import it and call `configure()`.
+   ledger validation, thread lookup, disposition markers and the review footer patterns) are
+   defined once: a `Write review helpers` step writes them as a module to `$RUNNER_TEMP`, and
+   both scripts import it and call `configure()`.
 3. The ledger lists repository issues once per run instead of once per accepted deferred
    finding.
 4. `Validate review body` parses the Summary table and readiness once, in the renderer,
@@ -25,7 +25,12 @@ per workflow, newest first.
    skill must still be a plain directory with no symbolic links.
 6. Smaller cleanups: one failure reporter shared by the publish and complete jobs, no
    duplicate `is_positive`/`nonempty` helpers or nested `datetime` import, and one
-   `Reviewed with:` prefix pattern in the merged summary.
+   `Reviewed with:` prefix pattern in the merged summary. Unused imports, the unread
+   `ledger_outcome` output, a no-op `mkdir`, a repeated `export` and a second fetch of the
+   published review after `guard()` are gone, and the renderer defines its Readiness
+   pattern once.
+7. The review work directory is `.auto-reviewer/` instead of `.auto-review/`; a PR that tracks
+   files in `.auto-reviewer/` fails the review job.
 
 ## v0.0.4 - 2026-11-10
 

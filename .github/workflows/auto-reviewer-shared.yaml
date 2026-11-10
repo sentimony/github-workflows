@@ -72,7 +72,7 @@ jobs:
           # the thread helpers read the repository, PR number and reviewer it sets.
           __all__ = ['Stop', 'loads', 'encoded', 'gh', 'pages', 'positive', 'text', 'require', 'valid_path',
                      'finding_identity', 'valid_envelope', 'configure', 'query', 'threads', 'matching_thread',
-                     'markers']
+                     'markers', 'reviewed_with', 'reviewed_duration_re', 'used_duration_re']
 
           class Stop(Exception): pass
 
@@ -175,6 +175,10 @@ jobs:
               return True
 
 
+          # Footer patterns of published reviews: the Reviewed with signature and the Used line.
+          reviewed_with=r'^Reviewed with: (?:(?:`auto-reviewer(?:-shared)?\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer(?:-shared)?\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` [^\n]+) skill · In `?'
+          reviewed_duration_re=re.compile(reviewed_with+r'([0-9]+) min ([0-9]+) sec`?(?: · .*)?$',re.M)
+          used_duration_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[[A-Za-z0-9][A-Za-z0-9._/-]*\]\(https://github\.com/sentimony/github-workflows\)</sup> · (?:`[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])? (?:low|medium|high)` · )?`([0-9]+) min ([0-9]+) sec`(?: · .*)?$',re.M)
           disposition_re=re.compile(r'<!--\s*cr-received-disposition:v1\s+(\{.*?\})\s*-->',re.S)
           repo=number=reviewer=prefix=None
 
@@ -258,7 +262,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 -I - <<'PYCODE'
-          import json, os, re, subprocess, sys
+          import os, re, sys
           from datetime import datetime
           from pathlib import Path
 
@@ -281,10 +285,8 @@ jobs:
                   sys.exit(0)
               all_threads=threads()
               valid=[]; unknown=False; review_durations=[]; usages=[]
-              reviewed_with=r'^Reviewed with: (?:(?:`auto-reviewer(?:-shared)?\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer(?:-shared)?\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` [^\n]+) skill · In `?'
               usage_re=re.compile(reviewed_with+r'[0-9]+ min [0-9]+ sec`?(?: · `?([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?)`? `?(low|medium|high)`? · `?([0-9]+(?:,[0-9]{3})*) tokens`? · `?\$([0-9]+\.[0-9]{4})`?)?$',re.M)
               used_usage_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[[A-Za-z0-9][A-Za-z0-9._/-]*\]\(https://github\.com/sentimony/github-workflows\)</sup> · `([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)` · `[0-9]+ min [0-9]+ sec` · `([0-9]+(?:,[0-9]{3})*) tokens` · `\$([0-9]+\.[0-9]{4})`$',re.M)
-              used_duration_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[[A-Za-z0-9][A-Za-z0-9._/-]*\]\(https://github\.com/sentimony/github-workflows\)</sup> · (?:`[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])? (?:low|medium|high)` · )?`([0-9]+) min ([0-9]+) sec`(?: · .*)?$',re.M)
               for r in reviews:
                   review_durations.append(None)
                   found_usage=usage_re.findall(r.get('body') or '') + used_usage_re.findall(r.get('body') or '')
@@ -299,7 +301,7 @@ jobs:
                       review_durations[-1]=d['duration_seconds']
                   except (Stop, ValueError, KeyError, TypeError):
                       unknown=True
-                      signature=re.findall(reviewed_with+r'([0-9]+) min ([0-9]+) sec`?(?: · .*)?$',r.get('body') or '',re.M)
+                      signature=reviewed_duration_re.findall(r.get('body') or '')
                       signature += used_duration_re.findall(r.get('body') or '')
                       if len(signature)==1 and int(signature[0][1])<60: review_durations[-1]=int(signature[0][0])*60+int(signature[0][1])
               durations=[d for d in review_durations if d is not None]
@@ -1119,7 +1121,6 @@ jobs:
                 print n out
               }')
               DURATION="$DURATION · \`$USAGE_MODEL\` \`$USAGE_EFFORT\` · \`$tokens tokens\` · \`\$$cost\`"
-              export DURATION
             fi
           fi
           tmp="$(mktemp)"
@@ -1251,7 +1252,6 @@ jobs:
       state: ${{ steps.validate.outputs.state }}
       validated_at: ${{ steps.validate.outputs.validated_at }}
       post_outcome: ${{ steps.post.outcome }}
-      ledger_outcome: ${{ steps.ledger.outcome }}
     needs: [gate, review]
     if: always() && needs.gate.outputs.review == 'true'
     runs-on: ubuntu-latest
@@ -1481,7 +1481,8 @@ jobs:
                   or closing[0].start() <= opening[0].end()):
               raise SystemExit('Expected one Details block')
           preamble = source[:opening[0].start()]
-          readiness = re.findall(r'^\*\*Readiness:\*\* ([Rr]eady with fixes|[Nn]ot ready|[Rr]eady)\s*$', preamble, re.M)
+          readiness_line = r'^\*\*Readiness:\*\* ([Rr]eady with fixes|[Nn]ot ready|[Rr]eady)'
+          readiness = re.findall(readiness_line + r'\s*$', preamble, re.M)
           table = re.findall(
               r'^\| *Intent *\| *System *\| *Craft *\| *Critical *\| *Important *\| *Minor *\|\s*\n'
               r'\|[^\n]+\|\s*\n\|[^\n]+\|', preamble, re.M)
@@ -1495,7 +1496,7 @@ jobs:
               sys.exit(3)
           # Never silently discard report evidence outside the agreed visible layout.
           outside = preamble.replace(source.splitlines()[0], '', 1).replace(table[0], '', 1)
-          outside = re.sub(r'^\*\*Readiness:\*\* ([Rr]eady with fixes|[Nn]ot ready|[Rr]eady)[ \t]*$', '', outside, flags=re.M)
+          outside = re.sub(readiness_line + r'[ \t]*$', '', outside, flags=re.M)
           tail = [line.strip() for line in source[closing[0].end():].splitlines() if line.strip()]
           if (outside.strip() or tail.count(signature) != 1 or len(tail) not in (1, 2)
                   or any(line != signature and not line.startswith('Next step: ') for line in tail)):
@@ -1620,7 +1621,7 @@ jobs:
           PHASE: PREPARE
         run: &review_actions_script |
           python3 -I - <<'PYCODE'
-          import hashlib, json, os, re, subprocess, sys
+          import hashlib, os, re, sys
           from datetime import datetime
           from pathlib import Path
 
@@ -1647,6 +1648,7 @@ jobs:
               current=gh(endpoint)
               require(current.get('id')==review_id and (current.get('user') or {}).get('login')==reviewer
                   and current.get('commit_id')==sha, 'published review identity changed')
+              return current
 
           def review_source(f):
               old=gh(f'{prefix}/pulls/{number}/reviews/{f["origin_review_id"]}')
@@ -1704,8 +1706,7 @@ jobs:
 
           try:
               path=Path(os.environ['ACTIONS_FILE'])
-              guard()
-              posted=gh(endpoint)
+              posted=guard()
               found=ledger_re.findall(posted.get('body',''))
               if phase=='COMPLETE' or found:
                   require(len(found)==1,'canonical ledger unavailable')
@@ -1715,7 +1716,6 @@ jobs:
                       and prepared['published_review_id']==review_id and prepared['run_id']==run_id,
                       'canonical ledger identity mismatch')
               if phase=='COMPLETE':
-                  path.parent.mkdir(parents=True,exist_ok=True)
                   path.write_text(encoded(prepared),encoding='utf-8')
                   Path(os.environ['POST_FILE']).write_text(ledger_re.sub('',posted['body']),encoding='utf-8')
               if not path.is_file():
@@ -1787,9 +1787,9 @@ jobs:
               d['review_source_id']=review_id
               for f in d['findings']: f['origin_review_id']=review_id
               signature=Path(os.environ['POST_FILE']).read_text(encoding='utf-8')
-              m=re.search(r'^Reviewed with: (?:(?:`auto-reviewer(?:-shared)?\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer(?:-shared)?\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` .*) skill · In `?([0-9]+) min ([0-9]+) sec`?(?: · .*)?$',signature,re.M)
+              m=reviewed_duration_re.search(signature)
               if m is None:
-                  m=re.search(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[[A-Za-z0-9][A-Za-z0-9._/-]*\]\(https://github\.com/sentimony/github-workflows\)</sup> · (?:`[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])? (?:low|medium|high)` · )?`([0-9]+) min ([0-9]+) sec`(?: · .*)?$',signature,re.M)
+                  m=used_duration_re.search(signature)
               duration=int(m[1])*60+int(m[2]) if m else None
               d.update(envelope_version=1,published_review_id=review_id,run_id=run_id,duration_seconds=duration,
                        action_progress=[],disposition_events=events)

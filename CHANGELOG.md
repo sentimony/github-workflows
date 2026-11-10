@@ -3,6 +3,22 @@
 One release tag covers every workflow in this repository. Each release lists its changes
 per workflow, newest first.
 
+## v0.0.6
+
+### auto-reviewer
+
+1. The repository's own caller and the README caller examples target
+   `auto-reviewer-shared.yaml@v0.0.5`.
+
+### Tests
+
+1. `tests/test_skl_x_live.py` installs cr-request through the real `Install cr-request
+   skill` step and the real `skl-x`, then compares the installed directory with `git
+   archive` of the same ref: the newest release tag and the full SHA of `v0.0.10`
+   (`plugins/aw/skills/` layout). It runs only with `AUTO_REVIEWER_LIVE=1`; the new
+   `skl-x live install` workflow sets it weekly, on manual dispatch and on pull requests
+   that change the install step.
+
 ## v0.0.5 - 2026-11-10
 
 ### auto-reviewer-shared

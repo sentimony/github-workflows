@@ -1465,8 +1465,11 @@ jobs:
                   visible.append(mask(line))
               else:
                   visible.append(mask(line) if line.startswith(('    ', '\t')) else line)
-          structural = re.sub(r'(?<!`)(`+)(?!`)(.*?)(?<!`)\1(?!`)',
-                              lambda match: mask(match[0]), ''.join(visible), flags=re.S)
+          # Inline code spans cannot cross a paragraph boundary into the public footer.
+          paragraphs = re.split(r'(\n[ \t]*\n)', ''.join(visible))
+          structural = ''.join(re.sub(r'(?<!`)(`+)(?!`)(.*?)(?<!`)\1(?!`)',
+                                      lambda match: mask(match[0]), paragraph, flags=re.S)
+                               for paragraph in paragraphs)
           structural = re.sub(r'<!--.*?-->', lambda match: mask(match[0]), structural, flags=re.S)
           opening = list(re.finditer(r'^<details(?:[ \t][^>]*)?><summary>Details</summary>[ \t]*$', structural, re.M))
           closing = list(re.finditer(r'^</details>[ \t]*$', structural, re.M))

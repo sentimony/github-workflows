@@ -1023,6 +1023,14 @@ class PublicPresentationTest(unittest.TestCase):
                 self.assertIn('\n\n'+evidence+'\n\n</details>',body)
                 self.assertTrue(body.rstrip().endswith(USED_EXAMPLE))
 
+    def test_unmatched_backtick_cannot_consume_the_details_boundary(self):
+        for evidence in ('It don`t break.', 'Unmatched ` quote.\n\nAnother paragraph with `code`.'):
+            with self.subTest(evidence=evidence):
+                result,body,_,_=self.render(evidence=evidence)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn(evidence,body)
+                self.assertTrue(body.rstrip().endswith(USED_EXAMPLE))
+
     def test_evidence_outside_details_fails_instead_of_silently_disappearing(self):
         for side in ('extra_before','extra_after'):
             with self.subTest(side=side):

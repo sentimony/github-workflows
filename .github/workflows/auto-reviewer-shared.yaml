@@ -704,7 +704,7 @@ jobs:
           persist-credentials: false
 
       # The agent gets no git diff, log, or show: they accept --output=<path>, which could write
-      # outside .auto-review/. The target is prepared here and handed over as files instead.
+      # outside .auto-reviewer/. The target is prepared here and handed over as files instead.
       - name: Prepare review target
         # bash -eo pipefail: a failing git diff feeding the base-copy loop must fail the step.
         shell: bash
@@ -712,14 +712,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ needs.gate.outputs.base_sha }}
         run: |
-          out=.auto-review/target
+          out=.auto-reviewer/target
           # The path is reserved: a PR that tracks anything under it, symlinks included, fails here.
           # rm -rf then clears only untracked leftovers, and every write below lands in a fresh directory.
-          if [ -n "$(git ls-files .auto-review)" ]; then
-            echo "::error::.auto-review/ is reserved for the review job; remove it from the PR"
+          if [ -n "$(git ls-files .auto-reviewer)" ]; then
+            echo "::error::.auto-reviewer/ is reserved for the review job; remove it from the PR"
             exit 1
           fi
-          rm -rf .auto-review
+          rm -rf .auto-reviewer
           mkdir -p "$out/base"
           merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
           {
@@ -815,10 +815,10 @@ jobs:
               cursor = advance(page, seen)
               if cursor is None:
                   break
-          with open('.auto-review/target/threads.json', 'w', encoding='utf-8') as out:
+          with open('.auto-reviewer/target/threads.json', 'w', encoding='utf-8') as out:
               json.dump(output, out, ensure_ascii=False)
           PY
-          digest=$(shasum -a 256 .auto-review/target/threads.json | cut -d ' ' -f 1)
+          digest=$(shasum -a 256 .auto-reviewer/target/threads.json | cut -d ' ' -f 1)
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       # User scope: the prepare step removed every .claude/ from the checkout, and the action restores
@@ -844,7 +844,6 @@ jobs:
           fi
           echo "cr-request source: $ref"
           npx -y --prefer-online skl-x@latest add "$SOURCE/tree/$ref" -s cr-request -a claude-code -g -y -m sm
-          mkdir -p .auto-review
           skill=~/.claude/skills/cr-request
           # The installed skill must be a plain copy: no link may lead outside it.
           [ -d "$skill" ] && [ ! -L "$skill" ] || { echo "::error::cr-request is not installed as a directory"; exit 1; }
@@ -944,7 +943,7 @@ jobs:
 
             Run the cr-request skill for this pull request on a prepared target. The target is the
             committed range from the merge base of BASE SHA and HEAD SHA to HEAD SHA, already captured in
-            .auto-review/target/: identity.txt (the target identity, tree included), log.txt
+            .auto-reviewer/target/: identity.txt (the target identity, tree included), log.txt
             (`<short sha> <full sha> <subject>` per commit), stat.txt, diff.patch, base/ with the
             merge-base copies of modified, deleted, and type-changed files, pr.json with the PR title,
             description, author, base and head branches, URL, reviews, and comments, and threads.json
@@ -960,16 +959,16 @@ jobs:
             not intent; label this a fresh review pass when the same reviewer already reviewed an older head.
 
             This run ends with your final message: dispatch reviewers in the foreground, never in the
-            background, write .auto-review/review.md before you finish, and never end with a reviewer still
+            background, write .auto-reviewer/review.md before you finish, and never end with a reviewer still
             running.
 
             If the cr-request skill is not available to you, do not review and do not write
-            .auto-review/review.md; stop and report that the skill is missing.
+            .auto-reviewer/review.md; stop and report that the skill is missing.
 
             Write exactly one pull request review body in English, with plain hyphens only (the ` · ` of the two
-            closing lines excepted), to .auto-review/review.md, and its inline comments to
-            .auto-review/comments.json and the action draft below; do not write or edit any other file.
-            .auto-review/review.md is this caller's persistence destination for the complete report and target
+            closing lines excepted), to .auto-reviewer/review.md, and its inline comments to
+            .auto-reviewer/comments.json and the action draft below; do not write or edit any other file.
+            .auto-reviewer/review.md is this caller's persistence destination for the complete report and target
             identity. Do not create the default local archive or identity.json. This workflow's output and
             closing-line instructions override the skill's generic defaults. Do not post these files; a later
             step posts them as one review that neither approves nor requests changes.
@@ -1008,9 +1007,9 @@ jobs:
 
             The target identity (base, head, tree, uncommitted state, excluded paths). **Range:** the reviewed
             range as a compare link with short SHAs, followed by the number of files and lines from the last line
-            of .auto-review/target/stat.txt:
+            of .auto-reviewer/target/stat.txt:
             [`<base7>...<head7>`](https://github.com/${{ github.repository }}/compare/<BASE SHA>...<HEAD SHA>)
-            **Commits:** the commits from .auto-review/target/log.txt, one line each, as
+            **Commits:** the commits from .auto-reviewer/target/log.txt, one line each, as
             - [`<short sha>`](https://github.com/${{ github.repository }}/commit/<full sha>) <subject>
             and after 20 commits `and <n> more`. **Coverage:** how the review ran, the files read, what was
             skipped, and the intent sources.
@@ -1031,7 +1030,7 @@ jobs:
             Each verdict is PASS, FINDINGS, or UNASSESSED. Use only the severities Critical, Important, and Minor;
             the counts must match the findings, and zero findings means zeros.
 
-            .auto-review/comments.json is a JSON array with one object per finding that points at a line the PR
+            .auto-reviewer/comments.json is a JSON array with one object per finding that points at a line the PR
             adds or keeps in diff.patch, so it shows next to the code: {"path": "<repo path>", "line": <line
             number in the HEAD SHA file>, "body": "<Markdown>"}. The comment body starts with the same colored
             circle and level as in the findings list, a space, `<id> - <title>`, then the impact and evidence
@@ -1039,7 +1038,7 @@ jobs:
             only; write `[]` when none has one.
             A later step drops a comment whose line is outside the diff.
 
-            Write .auto-review/review-actions.json as exactly this JSON shape (all fields required, no
+            Write .auto-reviewer/review-actions.json as exactly this JSON shape (all fields required, no
             extra fields): {"schema_version":1,"repository":"owner/repo","pr_number":42,
             "head_sha":"<full HEAD SHA>","review_source_id":null,"findings":[{"origin_review_id":null,
             "original_id":"R2-F1","path":"src/a.py","severity":"Minor"}],"previous_findings":[{
@@ -1084,7 +1083,7 @@ jobs:
           claude_args: >-
             --model ${{ steps.model.outputs.model }} --effort ${{ steps.model.outputs.effort }}
             --max-turns 60
-            --allowedTools "Skill,Agent,Task,Grep,Glob,Read(./**),Read(~/.claude/skills/**),Edit(./.auto-review/review.md),Write(./.auto-review/review.md),Edit(./.auto-review/comments.json),Write(./.auto-review/comments.json),Edit(./.auto-review/review-actions.json),Write(./.auto-review/review-actions.json)"
+            --allowedTools "Skill,Agent,Task,Grep,Glob,Read(./**),Read(~/.claude/skills/**),Edit(./.auto-reviewer/review.md),Write(./.auto-reviewer/review.md),Edit(./.auto-reviewer/comments.json),Write(./.auto-reviewer/comments.json),Edit(./.auto-reviewer/review-actions.json),Write(./.auto-reviewer/review-actions.json)"
             --disallowedTools "Bash,Read(./.git/**)"
 
       # The duration is the agent step's wall time; the agent cannot measure it. Only the signature line
@@ -1103,7 +1102,7 @@ jobs:
           SIGNATURE: 'Reviewed with: `auto-reviewer-shared.yaml` `${{ steps.workflow_identity.outputs.ref }}` workflow · `cr-request` `v${{ steps.skill.outputs.version }}` skill'
           SEP: ' · '
         run: |
-          body=.auto-review/review.md
+          body=.auto-reviewer/review.md
           [ -f "$body" ] || exit 0
           elapsed=$(( $(date +%s) - START ))
           export DURATION="In \`$(( elapsed / 60 )) min $(( elapsed % 60 )) sec\`"
@@ -1150,7 +1149,7 @@ jobs:
           python3 -I - <<'PY'
           import json, pathlib, re
 
-          root = pathlib.Path(".auto-review")
+          root = pathlib.Path(".auto-reviewer")
           out = root / "comments.json"
           if not (root / "review.md").is_file():
               out.unlink(missing_ok=True)
@@ -1207,8 +1206,8 @@ jobs:
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           [ -f "$EXECUTION_FILE" ] || exit 0
-          [ -f .auto-review/review.md ] \
-            || echo "::warning::The agent finished without .auto-review/review.md; its result follows"
+          [ -f .auto-reviewer/review.md ] \
+            || echo "::warning::The agent finished without .auto-reviewer/review.md; its result follows"
           # The agent chooses these strings: fields print as JSON, one per line, and the runner ignores
           # workflow commands until the random token ends the block.
           stop="$(openssl rand -hex 16)"
@@ -1224,7 +1223,7 @@ jobs:
             | (.permission_denials // [])[]
             | "\(.tool_name) \(.tool_input | {file_path, path, pattern, glob, command} | with_entries(select(.value != null))
                 | if .command then .command |= .[0:160] else . end | tojson)"' "$EXECUTION_FILE" || true
-          if [ ! -f .auto-review/review.md ]; then
+          if [ ! -f .auto-reviewer/review.md ]; then
             jq -r '[if type == "array" then .[] else . end | select(.type? == "result")] | last | "subtype=\(.subtype // "none") turns=\(.num_turns // "none") is_error=\(.is_error | tostring)", (.result // "no result message")[0:4000]' "$EXECUTION_FILE" || true
           fi
 
@@ -1233,10 +1232,10 @@ jobs:
           name: claude-review
           # Only the files publish reads: the review target and anything else stay on the runner.
           path: |
-            .auto-review/review.md
-            .auto-review/comments.json
-            .auto-review/review-actions.json
-            .auto-review/target/threads.json
+            .auto-reviewer/review.md
+            .auto-reviewer/comments.json
+            .auto-reviewer/review-actions.json
+            .auto-reviewer/target/threads.json
           if-no-files-found: error
           retention-days: 1
           include-hidden-files: true

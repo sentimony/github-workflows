@@ -44,7 +44,7 @@ used as an API directive. No state inferred from free-form prose authorizes a wr
 ## Agent draft: `schema_version=1`
 
 The reviewer writes one JSON object to the caller's exact output path. In CI that path
-is `.auto-review/review-actions.json`; artifact upload/download carries it to publish
+is `.auto-reviewer/review-actions.json`; artifact upload/download carries it to publish
 as `review-out/review-actions.json` through `ACTIONS_FILE`. These files are transport,
 not a durable ledger. The host supplies the schema and confirmed previous identities
 in the brief, including when an external runner extracts only reviewer sections.

@@ -160,10 +160,10 @@ class TransportTest(unittest.TestCase):
         for key in ('schema_version','review_source_id','previous_findings','defer_decision'):
             self.assertIn(key,settings['prompt'])
         for name in ('Edit','Write'):
-            self.assertIn(name+'(./.auto-review/review-actions.json)',settings['claude_args'])
+            self.assertIn(name+'(./.auto-reviewer/review-actions.json)',settings['claude_args'])
         self.assertIn('--disallowedTools "Bash,',settings['claude_args'])
         upload=next(s for s in review['steps'] if str(s.get('uses','')).startswith('actions/upload-artifact@'))
-        self.assertIn('.auto-review/review-actions.json',upload['with']['path'])
+        self.assertIn('.auto-reviewer/review-actions.json',upload['with']['path'])
         self.assertEqual(workflow['jobs']['publish']['env']['ACTIONS_FILE'],'review-out/review-actions.json')
         self.assertFalse(any(str(s.get('uses','')).startswith('actions/checkout@') for s in workflow['jobs']['publish']['steps']))
 
@@ -210,7 +210,7 @@ class PrepareThreadsTest(unittest.TestCase):
         run = step('Prepare review threads')
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / '.auto-review/target').mkdir(parents=True)
+            (root / '.auto-reviewer/target').mkdir(parents=True)
             fake = root / 'gh'
             fake.write_text('''#!/usr/bin/env python3
 import json, sys
@@ -232,7 +232,7 @@ print(json.dumps(result))
             fake.chmod(0o755)
             env = {**os.environ, 'PATH': str(root) + os.pathsep + os.environ['PATH'], 'GITHUB_REPOSITORY':'owner/repo', 'NUMBER':'42', 'GITHUB_OUTPUT':str(root/'output')}
             subprocess.run(['bash', '-eo', 'pipefail', '-c', run], cwd=root, env=env, check=True)
-            threads = json.loads((root / '.auto-review/target/threads.json').read_text())
+            threads = json.loads((root / '.auto-reviewer/target/threads.json').read_text())
             self.assertEqual([t['thread_id'] for t in threads], ['t1', 't2'])
             self.assertEqual([c['databaseId'] for c in threads[0]['comments']], [1, 2])
             self.assertEqual(threads[0]['comments'][1]['authorAssociation'], 'MEMBER')
@@ -1249,16 +1249,16 @@ class WorkflowIdentityTest(unittest.TestCase):
 class UsageRecordTest(unittest.TestCase):
     def run_duration(self, execution, model='claude-sonnet-5-5', effort='medium', raw=None, version='0.0.11', elapsed=125, workflow_ref='v0.0.3'):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); (root/'.auto-review').mkdir()
+            root=Path(tmp); (root/'.auto-reviewer').mkdir()
             sig=f'Reviewed with: `auto-reviewer-shared.yaml` `{workflow_ref}` workflow · `cr-request` `v{version}` skill'
-            (root/'.auto-review/review.md').write_text('<!-- m -->\nbody\n\n'+sig+'\nNext step: `/cr-received PR #1`\n')
+            (root/'.auto-reviewer/review.md').write_text('<!-- m -->\nbody\n\n'+sig+'\nNext step: `/cr-received PR #1`\n')
             env={**os.environ,'START':'0','SIGNATURE':sig,'SEP':' · ','USAGE_MODEL':model,'USAGE_EFFORT':effort}
             if execution is not None:
                 (root/'exec.json').write_text(raw if raw is not None else json.dumps(execution)); env['EXEC_FILE']=str(root/'exec.json')
             run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))',f'elapsed={elapsed}')
             result=subprocess.run(['bash','-eo','pipefail','-c',run],cwd=root,env=env,capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
-            return (root/'.auto-review/review.md').read_text().splitlines()[-2]
+            return (root/'.auto-reviewer/review.md').read_text().splitlines()[-2]
 
     def test_usage_is_appended_to_the_signature(self):
         result={'type':'result','total_cost_usd':0.43215,'usage':{'input_tokens':100,'output_tokens':20,'cache_creation_input_tokens':3,'cache_read_input_tokens':900},'modelUsage':{}}

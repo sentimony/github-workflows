@@ -9,7 +9,8 @@ per workflow, newest first.
 
 1. The review actions script is defined once: `Complete review actions` reuses the
    `Publish review actions` script through a YAML anchor, and `PHASE` still selects
-   PREPARE or COMPLETE behavior. The workflow shrinks by 468 lines.
+   PREPARE or COMPLETE behavior. This alone removes 472 lines; the whole release shrinks
+   the workflow from 2852 to 2210 lines.
 2. The helpers shared by the merged summary and the review actions scripts (API access,
    ledger validation, thread lookup, disposition markers and the review footer patterns) are
    defined once: a `Write review helpers` step writes them as a module to `$RUNNER_TEMP`, and

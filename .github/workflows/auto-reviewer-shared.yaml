@@ -830,6 +830,7 @@ jobs:
       # REVIEW_SKILLS_REF repo variable pins a full commit SHA.
       # Latest-release lookup preserves the requested upstream behavior; use the variable for a pin.
       # Owner accepts the moving skl-x@latest installer; the /tree/<ref> source keeps the skill pinned.
+      # No post-install ref check: cr-request versions do not follow the repository tags (AGENTS.md).
       - name: Install cr-request skill
         id: skill
         env:

@@ -7,7 +7,8 @@
    completion and merged summary. Repeated steps share YAML anchors
    (`&review_actions_script`, `&write_review_helpers`): edit the anchored step, its aliases
    follow. Helpers used by more than one script live in the `Write review helpers` module
-   (`auto_reviewer_lib`), not in copies. Every inline `python3` runs as `python3 -I`.
+   (`auto_reviewer_lib`), not in copies. Every inline `python3` in it runs as
+   `python3 -I`.
 2. `.github/workflows/auto-reviewer.yaml` - this repository's own caller, pinned to the
    last released tag.
 3. `.github/workflows/ci.yml` - the `validate` job: the unit tests and a pinned actionlint.
@@ -49,4 +50,10 @@ against `.github/workflows/auto-reviewer.yaml` with `--required-ci-job validate`
    step summary for diagnosis; a pinned-version override is outside this contract.
 7. The cr-request install uses the moving `skl-x@latest` at the owner's explicit request;
    this is an accepted trade-off, not a defect for review. The skill itself stays pinned
-   by the `/tree/<ref>` source.
+   by the `/tree/<ref>` source: skl-x installs exactly that tree, including the older
+   `plugins/*/skills/` layouts, so the workflow adds no post-install ref check. The
+   cr-request `metadata.version` does not follow the repository tags and cannot serve
+   as one.
+8. Released contracts are not kept as test snapshots (the v0.0.2 snapshot was removed at
+   the owner's request): tags are immutable, and the checker is tested against the
+   current workflow and callers. This is an accepted trade-off, not a defect for review.

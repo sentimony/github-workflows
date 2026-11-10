@@ -31,6 +31,8 @@ per workflow, newest first.
    pattern once.
 7. The review work directory is `.auto-reviewer/` instead of `.auto-review/`; a PR that tracks
    files in `.auto-reviewer/` fails the review job.
+8. Tests no longer keep the v0.0.2 contract snapshot, and the four thread badge styles share
+   one test. The README caller examples are collapsible sections.
 
 ## v0.0.4 - 2026-11-10
 

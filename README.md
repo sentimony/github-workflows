@@ -102,7 +102,8 @@ CI runs on branch pushes, pull requests, and manual dispatch. Tag pushes do not 
 The [transport contract](AUTO_REVIEWER_SHARED_TRANSPORT.md) defines the review draft, ledger,
 and host actions.
 
-Agentic workflow (`validate`):
+<details>
+<summary>Agentic workflow (<code>validate</code>)</summary>
 
 ```yaml
 name: Auto Reviewer
@@ -135,7 +136,10 @@ jobs:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
-SoundCloud catalog (`check`):
+</details>
+
+<details>
+<summary>SoundCloud catalog (<code>check</code>)</summary>
 
 ```yaml
 name: Auto Reviewer
@@ -167,6 +171,8 @@ jobs:
       AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
+
+</details>
 
 ## Offline checks
 

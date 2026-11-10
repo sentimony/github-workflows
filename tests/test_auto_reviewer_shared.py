@@ -762,26 +762,18 @@ class ResolverRunTest(unittest.TestCase):
         result=self.resolve(); self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(len(self.mutations()),1)
 
-    def test_thread_root_is_found_with_old_and_new_badge_style(self):
-        for style in ('for-the-badge','flat-square'):
-            with self.subTest(style=style):
-                self.initial['thread']['comments'][0]['body']='![Important](https://img.shields.io/badge/Medium-C99A3A?style='+style+') R1-F1 - issue'
+    def test_thread_root_is_found_with_every_badge_style(self):
+        bodies = ['![Important](https://img.shields.io/badge/Medium-C99A3A?style=for-the-badge) R1-F1 - issue',
+                  '![Important](https://img.shields.io/badge/Medium-C99A3A?style=flat-square) R1-F1 - issue',
+                  r'$\color{orange}{\bigcirc}$ Medium R1-F1 - issue',
+                  r'$\color{orange}◎$ Medium R1-F1 - issue']
+        for body in bodies:
+            with self.subTest(body=body):
+                self.initial['thread']['comments'][0]['body']=body
                 self.prepare()
                 result=self.resolve(); self.assertEqual(result.returncode,0,result.stderr)
                 result=self.complete(); self.assertEqual(result.returncode,0,result.stderr)
                 self.assertNotIn('source thread is missing or ambiguous',result.stderr)
-
-    def test_thread_root_is_found_with_colored_circle(self):
-        self.initial['thread']['comments'][0]['body']=r'$\color{orange}{\bigcirc}$ Medium R1-F1 - issue'
-        self.prepare()
-        result=self.resolve(); self.assertEqual(result.returncode,0,result.stderr)
-        result=self.complete(); self.assertEqual(result.returncode,0,result.stderr)
-
-    def test_thread_root_is_found_with_concentric_circle(self):
-        self.initial['thread']['comments'][0]['body']=r'$\color{orange}◎$ Medium R1-F1 - issue'
-        self.prepare()
-        result=self.resolve(); self.assertEqual(result.returncode,0,result.stderr)
-        result=self.complete(); self.assertEqual(result.returncode,0,result.stderr)
 
     def test_addressed_and_already_resolved_any_actor(self):
         for actor in (None,'so-upstars','github-actions[bot]','other-human'):

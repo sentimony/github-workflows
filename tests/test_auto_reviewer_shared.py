@@ -226,7 +226,7 @@ class DraftTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root/'actions.json').write_text(json.dumps(draft))
-            low=r'$\color{green}{\bigcirc}$ Low'
+            low=r'$\color{green}◎$ Low'
             (root/'body.md').write_text('| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | FINDINGS | 0 | 0 | 1 |\n- '+low+' R2-F1 [`src/a.py:1`](url) issue\n')
             (root/'comments.json').write_text(json.dumps([{'path':'src/a.py','line':1,'body':low+' R2-F1 - issue'}]))
             env = {**os.environ, 'REPO':'owner/repo', 'NUMBER':'42', 'HEAD_SHA':'a'*40,
@@ -250,9 +250,9 @@ class DraftTest(unittest.TestCase):
             return subprocess.run(['bash','-eo','pipefail','-c',run], env=env, capture_output=True, text=True)
 
     def test_colored_circle_matches_severity_in_report_and_comment(self):
-        forms = [('Critical',r'$\color{red}{\bigcirc}$ High'),
-                 ('Important',r'$\color{orange}{\bigcirc}$ Medium'),
-                 ('Minor',r'$\color{green}{\bigcirc}$ Low')]
+        forms = [('Critical',r'$\color{red}◎$ High'),
+                 ('Important',r'$\color{orange}◎$ Medium'),
+                 ('Minor',r'$\color{green}◎$ Low')]
         for severity, circle in forms:
             with self.subTest(severity=severity):
                 line = '- '+circle+' R2-F1 [`src/a.py:1`](url) issue'
@@ -261,8 +261,8 @@ class DraftTest(unittest.TestCase):
                 self.assertNotEqual(self.run_badge_draft(line, wrong+' R2-F1 - issue', severity).returncode, 0)
 
     def test_legacy_severity_forms_are_rejected_in_new_drafts(self):
-        circle=r'$\color{green}{\bigcirc}$ Low'
-        for legacy in ('**Minor**', '![Minor](https://img.shields.io/badge/Low-539BF5?style=flat-square)',
+        circle=r'$\color{green}◎$ Low'
+        for legacy in (r'$\color{green}{\bigcirc}$ Low', '**Minor**', '![Minor](https://img.shields.io/badge/Low-539BF5?style=flat-square)',
                        '![Minor](https://img.shields.io/badge/Low-539BF5?style=for-the-badge)'):
             with self.subTest(legacy=legacy):
                 self.assertNotEqual(self.run_badge_draft('- '+legacy+' R2-F1 [`src/a.py:1`](url) issue', circle+' R2-F1 - issue').returncode, 0)
@@ -749,6 +749,12 @@ class ResolverRunTest(unittest.TestCase):
 
     def test_thread_root_is_found_with_colored_circle(self):
         self.initial['thread']['comments'][0]['body']=r'$\color{orange}{\bigcirc}$ Medium R1-F1 - issue'
+        self.prepare()
+        result=self.resolve(); self.assertEqual(result.returncode,0,result.stderr)
+        result=self.complete(); self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_thread_root_is_found_with_concentric_circle(self):
+        self.initial['thread']['comments'][0]['body']=r'$\color{orange}◎$ Medium R1-F1 - issue'
         self.prepare()
         result=self.resolve(); self.assertEqual(result.returncode,0,result.stderr)
         result=self.complete(); self.assertEqual(result.returncode,0,result.stderr)

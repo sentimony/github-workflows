@@ -210,8 +210,9 @@ jobs:
               # Only the inline heading identifies the finding; IDs cited in prose are context.
               # Keep this matcher self-contained: the API-only resolver has no checkout or PR code.
               badge={'Critical':'High-E5534B','Important':'Medium-C99A3A','Minor':'Low-539BF5'}[f['severity']]
-              circle={'Critical':r'$\color{red}{\bigcirc}$ High','Important':r'$\color{orange}{\bigcirc}$ Medium','Minor':r'$\color{green}{\bigcirc}$ Low'}[f['severity']]
-              pattern=r'^(?:\*\*'+re.escape(f['severity'])+r'\*\*|!\['+re.escape(f['severity'])+r'\]\(https://img\.shields\.io/badge/'+re.escape(badge)+r'\?style=(?:for-the-badge|flat-square)\)|'+re.escape(circle)+r') '+re.escape(f['original_id'])+r'(?:\s|$)'
+              circle={'Critical':r'$\color{red}◎$ High','Important':r'$\color{orange}◎$ Medium','Minor':r'$\color{green}◎$ Low'}[f['severity']]
+              legacy_circle=circle.replace('◎', r'{\bigcirc}')
+              pattern=r'^(?:\*\*'+re.escape(f['severity'])+r'\*\*|!\['+re.escape(f['severity'])+r'\]\(https://img\.shields\.io/badge/'+re.escape(badge)+r'\?style=(?:for-the-badge|flat-square)\)|'+re.escape(circle)+'|'+re.escape(legacy_circle)+r') '+re.escape(f['original_id'])+r'(?:\s|$)'
               for t in all_threads:
                   cs=t.get('comments',[])
                   if t.get('path') != f['path'] or not cs: continue
@@ -993,8 +994,8 @@ jobs:
             then each finding with severity, confidence, file:line, impact, and evidence, and an optional
             suggestion. Omit this part when there are no findings.
 
-            Use a GitHub Markdown math circle and level: Critical is `$\color{red}{\bigcirc}$ High`,
-            Important is `$\color{orange}{\bigcirc}$ Medium`, and Minor is `$\color{green}{\bigcirc}$ Low`.
+            Use a GitHub Markdown math circle and level: Critical is `$\color{red}◎$ High`,
+            Important is `$\color{orange}◎$ Medium`, and Minor is `$\color{green}◎$ Low`.
             Copy these forms exactly; the Critical, Important, and Minor table columns stay numbers.
 
             #### Target
@@ -1335,7 +1336,7 @@ jobs:
                       require(defer != 'ACCEPTED' or status == 'NOT_ADDRESSED' and f['severity'] != 'Critical', 'invalid accepted defer')
                       require(status != 'ADDRESSED' or defer == 'NONE', 'addressed finding has defer')
           # New drafts use circles; historical thread formats are handled by the matchers.
-          circles = {r'$\color{red}{\bigcirc}$ High': 'Critical', r'$\color{orange}{\bigcirc}$ Medium': 'Important', r'$\color{green}{\bigcirc}$ Low': 'Minor'}
+          circles = {r'$\color{red}◎$ High': 'Critical', r'$\color{orange}◎$ Medium': 'Important', r'$\color{green}◎$ Low': 'Minor'}
           circle_re = '(?:' + '|'.join(re.escape(circle) for circle in circles) + ')'
           report = Path(os.environ['BODY_FILE']).read_text(encoding='utf-8')
           found = [(circles[m[1]], m[2], m[3]) for m in re.finditer(
@@ -1800,8 +1801,9 @@ jobs:
               # Only the inline heading identifies the finding; IDs cited in prose are context.
               # Keep this matcher self-contained: the API-only resolver has no checkout or PR code.
               badge={'Critical':'High-E5534B','Important':'Medium-C99A3A','Minor':'Low-539BF5'}[f['severity']]
-              circle={'Critical':r'$\color{red}{\bigcirc}$ High','Important':r'$\color{orange}{\bigcirc}$ Medium','Minor':r'$\color{green}{\bigcirc}$ Low'}[f['severity']]
-              pattern=r'^(?:\*\*'+re.escape(f['severity'])+r'\*\*|!\['+re.escape(f['severity'])+r'\]\(https://img\.shields\.io/badge/'+re.escape(badge)+r'\?style=(?:for-the-badge|flat-square)\)|'+re.escape(circle)+r') '+re.escape(f['original_id'])+r'(?:\s|$)'
+              circle={'Critical':r'$\color{red}◎$ High','Important':r'$\color{orange}◎$ Medium','Minor':r'$\color{green}◎$ Low'}[f['severity']]
+              legacy_circle=circle.replace('◎', r'{\bigcirc}')
+              pattern=r'^(?:\*\*'+re.escape(f['severity'])+r'\*\*|!\['+re.escape(f['severity'])+r'\]\(https://img\.shields\.io/badge/'+re.escape(badge)+r'\?style=(?:for-the-badge|flat-square)\)|'+re.escape(circle)+'|'+re.escape(legacy_circle)+r') '+re.escape(f['original_id'])+r'(?:\s|$)'
               for t in all_threads:
                   cs=t.get('comments',[])
                   if t.get('path') != f['path'] or not cs: continue
@@ -2466,8 +2468,9 @@ jobs:
               # Only the inline heading identifies the finding; IDs cited in prose are context.
               # Keep this matcher self-contained: the API-only resolver has no checkout or PR code.
               badge={'Critical':'High-E5534B','Important':'Medium-C99A3A','Minor':'Low-539BF5'}[f['severity']]
-              circle={'Critical':r'$\color{red}{\bigcirc}$ High','Important':r'$\color{orange}{\bigcirc}$ Medium','Minor':r'$\color{green}{\bigcirc}$ Low'}[f['severity']]
-              pattern=r'^(?:\*\*'+re.escape(f['severity'])+r'\*\*|!\['+re.escape(f['severity'])+r'\]\(https://img\.shields\.io/badge/'+re.escape(badge)+r'\?style=(?:for-the-badge|flat-square)\)|'+re.escape(circle)+r') '+re.escape(f['original_id'])+r'(?:\s|$)'
+              circle={'Critical':r'$\color{red}◎$ High','Important':r'$\color{orange}◎$ Medium','Minor':r'$\color{green}◎$ Low'}[f['severity']]
+              legacy_circle=circle.replace('◎', r'{\bigcirc}')
+              pattern=r'^(?:\*\*'+re.escape(f['severity'])+r'\*\*|!\['+re.escape(f['severity'])+r'\]\(https://img\.shields\.io/badge/'+re.escape(badge)+r'\?style=(?:for-the-badge|flat-square)\)|'+re.escape(circle)+'|'+re.escape(legacy_circle)+r') '+re.escape(f['original_id'])+r'(?:\s|$)'
               for t in all_threads:
                   cs=t.get('comments',[])
                   if t.get('path') != f['path'] or not cs: continue

@@ -1279,7 +1279,7 @@ class DeterministicTrailerTest(unittest.TestCase):
     TABLE='| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | %s | %s | %s |'
 
     def finish(self, trailer, counts=(0,0,0)):
-        body='<!-- m -->\n'+self.TABLE%counts+'\n\n<details><summary>Details</summary>\n\nEvidence.\n\n</details>\n'+trailer
+        body='<!-- m -->\n'+self.TABLE%counts+'\n\n**Readiness:** Ready\n\n<details><summary>Details</summary>\n\nEvidence.\n\n</details>\n'+trailer
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'.auto-reviewer').mkdir()
             (root/'.auto-reviewer/review.md').write_text(body)
@@ -1320,6 +1320,21 @@ class DeterministicTrailerTest(unittest.TestCase):
         for counts in ((1,0,0),(0,2,0),(0,0,3)):
             with self.subTest(counts=counts):
                 self.assertTrue(self.finish('',counts).endswith('Next step: `/cr-received PR #7`\n'))
+
+    def test_fallback_next_step_needs_a_plain_ready(self):
+        trailer='<details><summary>Details</summary>\n\nEvidence.\n\n</details>\n'
+        for readiness in ('Not ready','Ready with fixes'):
+            with self.subTest(readiness=readiness):
+                body='<!-- m -->\n'+self.TABLE%(0,0,0)+'\n\n**Readiness:** '+readiness+'\n\n'+trailer
+                with tempfile.TemporaryDirectory() as tmp:
+                    root=Path(tmp); (root/'.auto-reviewer').mkdir()
+                    (root/'.auto-reviewer/review.md').write_text(body)
+                    env={**os.environ,'START':'0','SIGNATURE':self.SIG,'SEP':' · ','USAGE_MODEL':'m','USAGE_EFFORT':'medium','BODY_FILE_PATH':'.auto-reviewer/review.md','NUMBER':'7'}
+                    env.pop('EXEC_FILE',None)
+                    run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))','elapsed=1')
+                    result=subprocess.run(['bash','-eo','pipefail','-c',run],cwd=root,env=env,capture_output=True,text=True)
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    self.assertTrue((root/'.auto-reviewer/review.md').read_text().endswith('Next step: `/cr-received PR #7`\n'))
 
     def test_valid_agent_next_step_is_kept(self):
         body=self.finish(self.SIG+'\nNext step: `/cr-received PR #7` · two findings\n',(0,1,0))

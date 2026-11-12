@@ -12,8 +12,8 @@ per workflow, newest first.
    canonical signature (workflow ref, skill version, measured duration, usage) itself, so a
    missing or malformed trailer no longer fails Publish with "The review body does not end
    with the signature and Next step lines". A valid model `Next step` is kept; otherwise it
-   is derived from the Summary table (`/cr-received PR #<n>` with findings, else
-   `/verify -> /finalize squash`). The published format is unchanged. Fixes #11.
+   is derived from the Summary table and readiness (`/verify -> /finalize squash` only for
+   a plain Ready with no findings, else `/cr-received PR #<n>`). The published format is unchanged. Fixes #11.
 2. Missing `</details>`: a Details block the agent opened but did not close is closed by the
    same step before the closing lines.
 3. One retry: `Pre-validate review draft` runs the publish job's own review-actions validator

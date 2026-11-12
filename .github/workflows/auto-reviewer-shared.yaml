@@ -1266,9 +1266,10 @@ jobs:
                   and not re.search(r"^</details>[ \t]*$", body, re.M)):
               body += "\n\n</details>"
           if model_next is None:
-              # Fallback from the Summary table counts; only the model's reasoned choice is lost.
+              # Fallback from the Summary table counts and a plain Ready; only the model's reasoned choice is lost.
               counts = re.search(r"^\| *Intent *\|[^\n]*\n[^\n]*\n\|[^|]*\|[^|]*\|[^|]*\| *([0-9]+) *\| *([0-9]+) *\| *([0-9]+) *\|", body, re.M)
-              if counts and sum(map(int, counts.groups())) == 0:
+              ready = re.search(r"^\*\*Readiness:\*\* [Rr]eady\s*$", body, re.M)
+              if counts and ready and sum(map(int, counts.groups())) == 0:
                   model_next = "Next step: `/verify -> /finalize squash`"
               else:
                   number = os.environ.get("NUMBER", "")

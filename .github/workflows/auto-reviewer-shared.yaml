@@ -1,9 +1,9 @@
 name: Auto Reviewer (Shared)
 
-# Posts a cr-request PR review as yngwald on each open, non-draft, same-repo PR with green CI.
+# Posts a cr-request PR review as the `reviewer` input (default yngwald) on each open, non-draft, same-repo PR with green CI.
 # Automatic repeats need a new head and prior Critical/Important findings, up to the effective
-# limit (10 by default); a request for yngwald or dispatch bypasses that count. The read-only agent
-# writes review transport files. Only trusted publish steps receive the yngwald PAT to post the
+# limit (10 by default); a request for the reviewer or dispatch bypasses that count. The read-only agent
+# writes review transport files. Only trusted publish steps receive the reviewer PAT to post the
 # validated review and recover ledger actions. Pull_request runs use the PR branch's workflow,
 # so anyone who can push a branch can reach the PAT. Checks validate structure and token-like
 # strings, not prose; the `Auto Reviewer` status is advisory, not a required check.
@@ -11,17 +11,52 @@ on:
   workflow_call:
     inputs:
       required-ci-job:
-        description: Required CI job name
-        required: true
+        description: Required CI job name (kept for existing callers; use required-ci-jobs for several)
+        required: false
         type: string
+        default: ''
+      required-ci-jobs:
+        description: Required CI job names, newline- or comma-separated; merged with required-ci-job
+        required: false
+        type: string
+        default: ''
+      skippable-ci-jobs:
+        description: Required CI jobs whose skipped conclusion counts as success, newline- or comma-separated
+        required: false
+        type: string
+        default: ''
+      ci-events:
+        description: Events of the CI runs that count, comma-separated
+        required: false
+        type: string
+        default: push,workflow_dispatch
+      ci-workflow:
+        description: File name of the CI workflow in .github/workflows
+        required: false
+        type: string
+        default: ci.yml
+      reviewer:
+        description: Login of the account that owns the reviewer token and posts the review
+        required: false
+        type: string
+        default: yngwald
+      review-changed-head:
+        description: Also review a new head when the PR's own diff changed since the last reviewed head
+        required: false
+        type: boolean
+        default: false
       pr:
         description: PR number
         required: false
         type: string
         default: ''
     secrets:
+      AUTO_REVIEWER_TOKEN:
+        description: Reviewer PAT; takes precedence over AUTO_REVIEWER_YNGWALD
+        required: false
       AUTO_REVIEWER_YNGWALD:
-        required: true
+        description: Legacy name of the reviewer PAT
+        required: false
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
 
@@ -37,7 +72,7 @@ concurrency:
     claude-review-${{ github.event.pull_request.head.repo.full_name || github.event.workflow_run.head_repository.full_name || github.repository }}-${{
     github.event.workflow_run.head_sha || github.event.pull_request.head.sha || format('pr-{0}', inputs.pr) }}${{
     github.event.action == 'closed' && format('-closed-{0}', github.run_id) ||
-    github.event.action == 'review_requested' && github.event.requested_reviewer.login != 'yngwald'
+    github.event.action == 'review_requested' && github.event.requested_reviewer.login != inputs.reviewer
     && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
@@ -58,6 +93,7 @@ jobs:
       cancel-in-progress: false
     env:
       REPO: ${{ github.repository }}
+      REVIEWER: ${{ inputs.reviewer }}
       NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - name: Write review helpers
@@ -270,7 +306,7 @@ jobs:
           from auto_reviewer_lib import *
 
           try:
-              repo=os.environ['REPO']; number=int(os.environ['NUMBER']); reviewer='yngwald'; prefix=f'repos/{repo}'
+              repo=os.environ['REPO']; number=int(os.environ['NUMBER']); reviewer=os.environ['REVIEWER']; prefix=f'repos/{repo}'
               configure(repo, number, reviewer)
               ledger_re=re.compile(r'<!--\s*claude-review-ledger:v1\s+(\{.*?\})\s*-->',re.S)
               pr=gh(f'{prefix}/pulls/{number}')
@@ -419,13 +455,15 @@ jobs:
         name: Publish merged review summary
         if: always()
         env:
-          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
+          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_TOKEN || secrets.AUTO_REVIEWER_YNGWALD }}
         run: |
           python3 -I - <<'PYCODE'
           import json, os, subprocess, sys
           from pathlib import Path
           p=Path('summary.txt')
           if not p.is_file(): sys.exit(0)
+          if not os.environ.get('GH_TOKEN'):
+              print('::error::Set the AUTO_REVIEWER_TOKEN secret (or the legacy AUTO_REVIEWER_YNGWALD) to the PAT of '+os.environ['REVIEWER'],file=sys.stderr); sys.exit(1)
           repo=os.environ['REPO']; number=int(os.environ['NUMBER']); prefix=f'repos/{repo}'
           def gh(endpoint, method='GET', payload=None):
               result=subprocess.run(['gh','api',endpoint,'--method',method]+(['--input','-'] if payload is not None else []),input=json.dumps(payload) if payload is not None else None,text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
@@ -440,11 +478,11 @@ jobs:
                   if len(part)<100: return rows
                   page+=1
           try:
-              if gh('user').get('login')!='yngwald': raise RuntimeError('reviewer token owner mismatch')
+              if gh('user').get('login')!=os.environ['REVIEWER']: raise RuntimeError('reviewer token owner mismatch')
               pr=gh(f'{prefix}/pulls/{number}')
               if pr.get('number')!=number or pr.get('merged') is not True: raise RuntimeError('PR is not merged')
               comments=pages(f'{prefix}/issues/{number}/comments')
-              own=[c for c in comments if (c.get('user') or {}).get('login')=='yngwald' and '<!-- claude-review summary -->' in (c.get('body') or '')]
+              own=[c for c in comments if (c.get('user') or {}).get('login')==os.environ['REVIEWER'] and '<!-- claude-review summary -->' in (c.get('body') or '')]
               if len(own)>1: raise RuntimeError('ambiguous summary comments')
               body=p.read_text(encoding='utf-8')
               if own:
@@ -458,7 +496,7 @@ jobs:
   gate:
     name: Review gate
     # Failed CI runs pass too: the gate turns a pending request's status into `error` and skips.
-    if: github.event.action != 'closed' && (github.event.action != 'review_requested' || github.event.requested_reviewer.login == 'yngwald')
+    if: github.event.action != 'closed' && (github.event.action != 'review_requested' || github.event.requested_reviewer.login == inputs.reviewer)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -471,17 +509,22 @@ jobs:
       number: ${{ steps.gate.outputs.number }}
       base_sha: ${{ steps.gate.outputs.base_sha }}
       head_sha: ${{ steps.gate.outputs.head_sha }}
+      ci_jobs: ${{ steps.gate.outputs.ci_jobs }}
     steps:
       - name: Review gate decision
         id: gate
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          REVIEWER: yngwald
+          REVIEWER: ${{ inputs.reviewer }}
           REQUIRED_CI_JOB: ${{ inputs.required-ci-job }}
+          REQUIRED_CI_JOBS: ${{ inputs.required-ci-jobs }}
+          SKIPPABLE_CI_JOBS: ${{ inputs.skippable-ci-jobs }}
+          CI_EVENTS: ${{ inputs.ci-events }}
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+          REVIEW_CHANGED_HEAD: ${{ inputs.review-changed-head }}
+          HAS_REVIEWER_TOKEN: ${{ (secrets.AUTO_REVIEWER_TOKEN || secrets.AUTO_REVIEWER_YNGWALD) != '' }}
           CLAUDE_REVIEW_MAX_ROUNDS: ${{ vars.CLAUDE_REVIEW_MAX_ROUNDS }}
-          CI_EVENTS: '["push","workflow_dispatch"]'
-          SKIPPABLE_JOBS: '[]'
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
           RUN_HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
           EVENT_PR: ${{ github.event.pull_request.number || inputs.pr }}
@@ -490,11 +533,42 @@ jobs:
           CONTEXT: Auto Reviewer
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          if [[ ! "$REQUIRED_CI_JOB" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]; then
-            echo "::error::Invalid required CI job name"
+          if [ "$HAS_REVIEWER_TOKEN" != true ]; then
+            echo "::error::Set the AUTO_REVIEWER_TOKEN secret (or the legacy AUTO_REVIEWER_YNGWALD) to the PAT of $REVIEWER"
             exit 1
           fi
-          REQUIRED_JOBS=$(jq -nc --arg job "$REQUIRED_CI_JOB" '[$job]')
+          if [[ ! "$REVIEWER" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\[bot\])?$ ]]; then
+            echo "::error::Invalid reviewer login"
+            exit 1
+          fi
+          if [[ ! "$CI_WORKFLOW" =~ ^[A-Za-z0-9_.-]+\.ya?ml$ ]]; then
+            echo "::error::Invalid ci-workflow: use a file name in .github/workflows"
+            exit 1
+          fi
+          # A list with a newline splits on newlines only (job names may hold commas), else on commas.
+          split_list() {
+            jq -nc --arg v "$1" '$v | gsub("\r"; "") | (if contains("\n") then split("\n") else split(",") end)
+              | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))'
+          }
+          job_name_re='^[A-Za-z_][A-Za-z0-9 _.,()/-]*$'
+          REQUIRED_JOBS=$(jq -nc --argjson a "$(split_list "$REQUIRED_CI_JOBS")" --argjson b "$(split_list "$REQUIRED_CI_JOB")" \
+            '$a + $b | unique')
+          SKIPPABLE_JOBS=$(split_list "$SKIPPABLE_CI_JOBS")
+          if [ "$(jq length <<< "$REQUIRED_JOBS")" -eq 0 ]; then
+            echo "::error::Provide required-ci-jobs or required-ci-job"
+            exit 1
+          fi
+          if ! jq -e --arg re "$job_name_re" 'all(.[]; test($re))' <<< "$REQUIRED_JOBS" > /dev/null \
+            || ! jq -e --arg re "$job_name_re" 'all(.[]; test($re))' <<< "$SKIPPABLE_JOBS" > /dev/null; then
+            echo "::error::Invalid CI job name in required-ci-job(s) or skippable-ci-jobs"
+            exit 1
+          fi
+          CI_EVENTS_JSON=$(jq -nc --arg v "$CI_EVENTS" '$v | split(",") | map(gsub("\\s"; "")) | map(select(length > 0)) | unique')
+          export CI_EVENTS_JSON
+          if ! jq -e 'length > 0 and all(.[]; test("^[a-z_]+$"))' <<< "$CI_EVENTS_JSON" > /dev/null; then
+            echo "::error::Invalid ci-events: use a comma-separated list of event names"
+            exit 1
+          fi
           max_rounds=${CLAUDE_REVIEW_MAX_ROUNDS:-10}
           if [[ ! "$max_rounds" =~ ^0*[1-9][0-9]*$ ]]; then
             echo "::error::Invalid CLAUDE_REVIEW_MAX_ROUNDS: use a positive integer"
@@ -521,6 +595,17 @@ jobs:
                 | (.description // "") | startswith("Review requested; waiting")')
             [ "$waiting" != true ] || post_status error "Not reviewed: $1"
             skip "$1"
+          }
+
+          # Stable patch ID of the PR's own diff (merge base to head). Fails when the diff is unavailable,
+          # empty or too large for the compare API, so the caller reviews instead of skipping.
+          own_diff_id() {
+            local diff id
+            diff=$(gh api -H "Accept: application/vnd.github.diff" "repos/$REPO/compare/$1...$2") || return 1
+            [ -n "$diff" ] || return 1
+            id=$(git patch-id --stable <<< "$diff" | cut -d' ' -f1) || return 1
+            [ -n "$id" ] || return 1
+            printf '%s' "$id"
           }
 
           if [ "$EVENT_NAME" = workflow_dispatch ] && [ -z "$EVENT_PR" ]; then
@@ -563,9 +648,9 @@ jobs:
 
           # Select the newest run on this exact head from the explicitly allowed CI source events.
           # shellcheck disable=SC2016 # $event is a jq variable.
-          ci_run=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$head_sha&per_page=100" \
+          ci_run=$(gh api "repos/$REPO/actions/workflows/$CI_WORKFLOW/runs?head_sha=$head_sha&per_page=100" \
               --jq '[.workflow_runs[] | select(.event as $event
-                | (env.CI_EVENTS | fromjson | index($event)) != null)][0]
+                | (env.CI_EVENTS_JSON | fromjson | index($event)) != null)][0]
                 | if . == null then "none" elif .status != "completed" then .status
                 elif .conclusion != "success" then .conclusion else .id end')
           ci=$ci_run
@@ -589,9 +674,9 @@ jobs:
             skip "CI on $head_sha is $ci"
           fi
 
-          # A request for yngwald (pending, or this event) and a dispatch always review. An automatic
+          # A request for the reviewer (pending, or this event) and a dispatch always review. An automatic
           # trigger reviews the first head, and a new head after a review with Critical or Important
-          # findings while the total number of reviews from yngwald is below the effective limit.
+          # findings while the total number of reviews from the reviewer is below the effective limit.
           if [ "$requested" != true ] && [ "$EVENT_ACTION" != review_requested ] \
             && [ "$EVENT_NAME" != workflow_dispatch ]; then
             # One JSON object per review, slurped below: --paginate with --jq applies the filter per page.
@@ -656,7 +741,22 @@ jobs:
               )
               blocking=$(( blocking + prior_blocking ))
               [ "$last_sha" != "$head_sha" ] || skip_final "PR #$number already has a review of $head_sha"
-              [ "$blocking" -gt 0 ] || skip_final "the latest review of PR #$number has no Critical or Important findings"
+              if [ "$blocking" -eq 0 ]; then
+                # Opt-in: a clean review still gives way to a new head when the PR's own diff (base...head)
+                # changed since the last reviewed head. A merge of the base branch leaves it unchanged.
+                if [ "${REVIEW_CHANGED_HEAD:-false}" != true ]; then
+                  skip_final "the latest review of PR #$number has no Critical or Important findings"
+                fi
+                if [ -z "$base_sha" ] || ! old_id=$(own_diff_id "$base_sha" "$last_sha") \
+                  || ! new_id=$(own_diff_id "$base_sha" "$head_sha"); then
+                  echo "Own diff comparison unavailable; reviewing the new head." | tee -a "$GITHUB_STEP_SUMMARY"
+                elif [ "$old_id" = "$new_id" ]; then
+                  skip_final "the PR #$number diff did not change since the last review of ${last_sha:0:12}; only the base branch moved"
+                else
+                  echo "The PR #$number diff changed since the last review of ${last_sha:0:12}; reviewing the new head." \
+                    | tee -a "$GITHUB_STEP_SUMMARY"
+                fi
+              fi
             fi
             # Compare normalized decimal strings to avoid floating-point rounding or integer limits.
             if [ "${#total}" -lt "${#limit}" ] || { [ "${#total}" -eq "${#limit}" ] && [[ "$total" < "$limit" ]]; }; then
@@ -674,6 +774,7 @@ jobs:
             echo "number=$number"
             echo "base_sha=$base_sha"
             echo "head_sha=$head_sha"
+            echo "ci_jobs=$(jq -r 'join(", ")' <<< "$REQUIRED_JOBS")"
           } >> "$GITHUB_OUTPUT"
 
   review:
@@ -957,7 +1058,7 @@ jobs:
             commands are available (no git, no gh): use the tree in identity.txt and read these files
             instead, and pass the same instruction to any reviewer you dispatch. Intent: the PR title and
             description from pr.json, plus AGENTS.md. There is no plan file and no journal to write.
-            CI (${{ inputs.required-ci-job }}) is green on HEAD SHA; tests were not run in this job - say so in the gaps.
+            CI (${{ needs.gate.outputs.ci_jobs }}) is green on HEAD SHA; tests were not run in this job - say so in the gaps.
             pr.json keeps only reviews and comments by owners, members, and collaborators. They are context,
             not intent; label this a fresh review pass when the same reviewer already reviewed an older head.
 
@@ -1020,7 +1121,7 @@ jobs:
             #### Axis verdicts
 
             The reason for the readiness in one line, then one bullet per axis with its verdict and reasons; on
-            a fresh review pass, the status of each finding of the previous yngwald review after them.
+            a fresh review pass, the status of each finding of the previous review by the same reviewer after them.
 
             #### Set aside, open questions, and review gaps
 
@@ -1063,7 +1164,7 @@ jobs:
             below, backticks included, then the `Next step` line as the very last line. Put the complete command
             chain, including arguments and arrows, inside one code span with leading slashes. ` · ` goes before a
             reason; pick the line by the result:
-            - Findings, or a previous yngwald finding left not addressed, with no reason:
+            - Findings, or a previous finding left not addressed, with no reason:
               `` Next step: `/cr-received PR #${{ needs.gate.outputs.number }}` ``
             - No findings (a `Verify` line names a fingerprint without the record host, never this Tree):
               Next step: `/verify <plan path> -> /finalize squash`, where the plan path is the plan
@@ -1262,7 +1363,7 @@ jobs:
       statuses: write
     env:
       REPO: ${{ github.repository }}
-      REVIEWER: yngwald
+      REVIEWER: ${{ inputs.reviewer }}
       NUMBER: ${{ needs.gate.outputs.number }}
       HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
       MARKER: '<!-- claude-review sha=${{ needs.gate.outputs.head_sha }} -->'
@@ -1580,18 +1681,18 @@ jobs:
             echo "state=$state"
           } >> "$GITHUB_OUTPUT"
 
-      # The trusted post and ledger steps receive the yngwald PAT. This step checks its owner and posts
+      # The trusted post and ledger steps receive the reviewer PAT. This step checks its owner and posts
       # and inline comments as is. Inline comments count in the PR list's comment counter; a review
       # body alone does not. When GitHub refuses the comments (HTTP 422, a line outside its diff), the
       # body goes alone; any other failure, a timeout that may have posted included, posts nothing more.
       - id: post
         if: steps.validate.outputs.ready_to_post == 'true'
         env:
-          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
+          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_TOKEN || secrets.AUTO_REVIEWER_YNGWALD }}
         run: |
-          test -n "$GH_TOKEN" || { echo "::error::AUTO_REVIEWER_YNGWALD is not set"; exit 1; }
+          test -n "$GH_TOKEN" || { echo "::error::Set AUTO_REVIEWER_TOKEN (or the legacy AUTO_REVIEWER_YNGWALD) to the PAT of $REVIEWER"; exit 1; }
           login="$(gh api user --jq .login)"
-          test "$login" = "$REVIEWER" || { echo "::error::AUTO_REVIEWER_YNGWALD belongs to '$login', not $REVIEWER"; exit 1; }
+          test "$login" = "$REVIEWER" || { echo "::error::The reviewer token belongs to '$login', not $REVIEWER"; exit 1; }
           head=$(gh api "repos/$REPO/pulls/$NUMBER" --jq .head.sha)
           [ "$head" = "$HEAD_SHA" ] || { echo "::error::PR head changed before review POST"; exit 1; }
           payload="$(mktemp)"
@@ -1617,7 +1718,7 @@ jobs:
         id: ledger
         if: steps.post.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
+          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_TOKEN || secrets.AUTO_REVIEWER_YNGWALD }}
           REVIEW_ID: ${{ steps.post.outputs.review_id }}
           PHASE: PREPARE
         run: &review_actions_script |
@@ -1975,7 +2076,7 @@ jobs:
               return result['data']
           repo=os.environ['REPO']; number=int(os.environ['NUMBER']); sha=os.environ['HEAD_SHA']
           review_id=int(os.environ['REVIEW_ID']); prefix='repos/'+repo
-          reviewer='yngwald'
+          reviewer=os.environ['REVIEWER']
           def positive(v): return type(v) is int and v>0
           def guard():
               pr=api(f'{prefix}/pulls/{number}')
@@ -2100,7 +2201,7 @@ jobs:
       statuses: write
     env:
       REPO: ${{ github.repository }}
-      REVIEWER: yngwald
+      REVIEWER: ${{ inputs.reviewer }}
       NUMBER: ${{ needs.gate.outputs.number }}
       HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
       MARKER: '<!-- claude-review sha=${{ needs.gate.outputs.head_sha }} -->'
@@ -2116,7 +2217,7 @@ jobs:
         id: ledger
         if: always() && needs.publish.outputs.review_id != ''
         env:
-          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_YNGWALD }}
+          GH_TOKEN: ${{ secrets.AUTO_REVIEWER_TOKEN || secrets.AUTO_REVIEWER_YNGWALD }}
           REVIEW_ID: ${{ needs.publish.outputs.review_id }}
           PHASE: COMPLETE
         run: *review_actions_script
@@ -2201,6 +2302,7 @@ jobs:
       cancel-in-progress: false
     env:
       REPO: ${{ github.repository }}
+      REVIEWER: ${{ inputs.reviewer }}
       NUMBER: ${{ needs.gate.outputs.number }}
       SUMMARY_REFRESH: 'true'
     steps:

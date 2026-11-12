@@ -1364,7 +1364,7 @@ class SummaryRefreshTest(unittest.TestCase):
             state={'merged':True,'reviews':[],'comments':[],'threads':[]}
             (root/'state.json').write_text(json.dumps(state))
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],
-                 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42'}
+                 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42','REVIEWER':'so-upstars','GH_TOKEN':'token'}
             def invoke(job):
                 for item in jobs[job]['steps']:
                     result=subprocess.run(['bash','-eo','pipefail','-c',step(item['name'])],cwd=root,env=env,capture_output=True,text=True)
@@ -1386,7 +1386,7 @@ class SummaryRefreshTest(unittest.TestCase):
             os.symlink(ROOT/'tests/fixtures/auto-reviewer-shared/gh_summary',root/'gh')
             (root/'state.json').write_text(json.dumps({'merged':False,'reviews':[],'comments':[]}))
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],
-                 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42',
+                 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42','REVIEWER':'so-upstars','GH_TOKEN':'token',
                  'SUMMARY_REFRESH':job['env']['SUMMARY_REFRESH']}
             for item in job['steps']:
                 result=subprocess.run(['bash','-eo','pipefail','-c',step(item['name'])],cwd=root,env=env,capture_output=True,text=True)
@@ -1412,7 +1412,7 @@ class SummaryParserTest(unittest.TestCase):
                 self.assertEqual(int(p.stdout),expected)
 
 class GateTest(unittest.TestCase):
-    def run_gate(self, reviews=(), labels=(), action='', event='pull_request', requested=False, ci='success', jobs=None, author='author', source_events=None, runs=None, required_jobs=None, skippable_jobs=None, event_pr='42', ci_job=None, max_rounds='', total_override=None):
+    def run_gate(self, reviews=(), labels=(), action='', event='pull_request', requested=False, ci='success', jobs=None, author='author', source_events=None, runs=None, required_jobs=None, skippable_jobs=None, event_pr='42', ci_job=None, max_rounds='', total_override=None, ci_jobs=None, ci_workflow='ci.yml', review_changed_head=False, has_token=True, diffs=None, reviewer_login='so-upstars'):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
             pr={'head':{'sha':'a'*40,'repo':{'full_name':'owner/repo'}}, 'base':{'sha':'b'*40},
@@ -1426,6 +1426,7 @@ class GateTest(unittest.TestCase):
                     'status':'completed' if ci in ('success','failure') else ci,
                     'conclusion':ci if ci in ('success','failure') else None}]
             (root/'data.json').write_text(json.dumps({'pr':pr,'reviews':reviews,'runs':runs,
+                'diffs':diffs or {},
                 'jobs':jobs if jobs is not None else [{'name':n,'conclusion':'success'} for n in required_jobs]}))
             fake=root/'gh'
             fake.write_text('''#!/usr/bin/env python3
@@ -1436,7 +1437,11 @@ d=json.load(open(os.environ['DATA']))
 endpoint=next((x for x in args if x.startswith('repos/')), '')
 if '/statuses/' in endpoint: sys.exit(0)
 if '/commits/' in endpoint and '/status?' in endpoint: print('false'); sys.exit(0)
-if '/actions/workflows/ci.yml/runs?' in endpoint:
+if '/compare/' in endpoint:
+    pair=endpoint.split('/compare/')[1]
+    if pair not in d['diffs']: sys.exit(1)
+    sys.stdout.write(d['diffs'][pair]); sys.exit(0)
+if '/actions/workflows/'+os.environ['CI_WORKFLOW']+'/runs?' in endpoint:
     if 'head_sha='+'a'*40 not in endpoint: sys.exit(2)
     source=json.dumps({'workflow_runs':d['runs']})
     result=subprocess.run(['jq','-r',args[args.index('--jq')+1]],input=source,text=True,capture_output=True)
@@ -1453,11 +1458,14 @@ sys.exit(2)
 ''')
             fake.chmod(0o755)
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'DATA':str(root/'data.json'),
-                 'REPO':'owner/repo','REVIEWER':'so-upstars','RUN_SHA':'','RUN_HEAD_REPO':'',
+                 'REPO':'owner/repo','REVIEWER':reviewer_login,'RUN_SHA':'','RUN_HEAD_REPO':'',
                  'API_MARKER':str(root/'api-called'),
-                 'REQUIRED_CI_JOB': required_jobs[0] if ci_job is None else ci_job,
-                 'CLAUDE_REVIEW_MAX_ROUNDS':max_rounds,'CI_EVENTS':json.dumps(source_events),
-                 'SKIPPABLE_JOBS':json.dumps(skippable_jobs),
+                 'REQUIRED_CI_JOB': (required_jobs[0] if ci_job is None else ci_job) if ci_jobs is None else '',
+                 'REQUIRED_CI_JOBS': ci_jobs or '', 'CI_WORKFLOW': ci_workflow,
+                 'REVIEW_CHANGED_HEAD': 'true' if review_changed_head else 'false',
+                 'HAS_REVIEWER_TOKEN': 'true' if has_token else 'false',
+                 'CLAUDE_REVIEW_MAX_ROUNDS':max_rounds,'CI_EVENTS':','.join(source_events),
+                 'SKIPPABLE_CI_JOBS':','.join(skippable_jobs),
                  'EVENT_PR':event_pr,'EVENT_NAME':event,'EVENT_ACTION':action,'CONTEXT':'Auto Reviewer',
                  'RUN_URL':'url','GITHUB_OUTPUT':str(root/'output'),'GITHUB_STEP_SUMMARY':str(root/'summary')}
             source=step('Review gate decision')
@@ -1634,13 +1642,95 @@ sys.exit(2)
                     self.assertIn(f'review={str(allowed).lower()}', output)
 
     def test_invalid_ci_job_fails_before_api(self):
-        for job in ('', 'a b', '"x"', '["validate"]', 'a","b', '1job', '-job', 'x\ny', 'x\n'):
+        for job in ('', ' ', ',', '"x"', '["validate"]', 'a","b', '1job', '-job', 'x\n$(id)', 'a;b'):
             with self.subTest(job=job):
                 result, output = self.run_gate(ci_job=job)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn('review=true', output)
                 self.assertIn('error', result.stdout.lower())
                 self.assertFalse(result.api_called)
+
+    def test_several_ci_jobs_are_all_required(self):
+        for lst in ('Lint\nUnit tests', 'Lint, Unit tests', 'Lint,Unit tests'):
+            names=['Lint','Unit tests']
+            with self.subTest(lst=lst):
+                result, output = self.run_gate(ci_jobs=lst, required_jobs=names)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('review=true', output)
+                self.assertIn('ci_jobs=Lint, Unit tests', output)
+                result, output = self.run_gate(ci_jobs=lst, required_jobs=names,
+                    jobs=[{'name':'Lint','conclusion':'success'}])
+                self.assertIn('review=false', output)
+                result, output = self.run_gate(ci_jobs=lst, required_jobs=names,
+                    jobs=[{'name':'Lint','conclusion':'success'},{'name':'Unit tests','conclusion':'failure'}])
+                self.assertIn('review=false', output)
+        result, output = self.run_gate(ci_jobs='a,b\nc', required_jobs=['a,b','c'])
+        self.assertIn('review=true', output)
+        # required-ci-job and required-ci-jobs are merged
+        result, output = self.run_gate(ci_job='Lint', required_jobs=['Lint'],
+            jobs=[{'name':'Lint','conclusion':'success'}])
+        self.assertIn('ci_jobs=Lint', output)
+
+    def test_skippable_list_and_custom_ci_source(self):
+        result, output = self.run_gate(required_jobs=['Docs','Lint'], ci_jobs='Docs,Lint', skippable_jobs=['Docs'],
+            jobs=[{'name':'Docs','conclusion':'skipped'},{'name':'Lint','conclusion':'success'}])
+        self.assertIn('review=true', output)
+        result, output = self.run_gate(required_jobs=['Docs','Lint'], ci_jobs='Docs,Lint', skippable_jobs=['Docs'],
+            jobs=[{'name':'Docs','conclusion':'success'},{'name':'Lint','conclusion':'skipped'}])
+        self.assertIn('review=false', output)
+        result, output = self.run_gate(ci_workflow='build.yaml', source_events=['pull_request'])
+        self.assertIn('review=true', output)
+        for bad in ('../x.yml', 'ci', 'a/b.yml', 'ci.yml x', ''):
+            with self.subTest(workflow=bad):
+                result, output = self.run_gate(ci_workflow=bad)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(result.api_called)
+        for bad in ('', 'Push', 'a b;c', '$(id)'):
+            with self.subTest(events=bad):
+                result, output = self.run_gate(source_events=[bad], runs=[])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(result.api_called)
+
+    def test_missing_reviewer_token_fails_before_api(self):
+        result, output = self.run_gate(has_token=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('AUTO_REVIEWER_TOKEN', result.stdout)
+        self.assertFalse(result.api_called)
+
+    def test_invalid_reviewer_login_fails_before_api(self):
+        for login in ('', 'a b', 'x;y', '-x', 'x-', '$(id)'):
+            with self.subTest(login=login):
+                result, output = self.run_gate(reviewer_login=login)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(result.api_called)
+
+    def test_review_changed_head(self):
+        old_head='c'*40; base='b'*40
+        diff=lambda body: f'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-x\n+{body}\n'
+        pair=lambda head: f'{base}...{head}'
+        clean=self.reviews(0,1,clean=True)
+        cases=[
+            # (flag, diffs, expected review, reason)
+            (False, {pair(old_head):diff('a'), pair('a'*40):diff('b')}, False, 'no Critical or Important'),
+            (True, {pair(old_head):diff('a'), pair('a'*40):diff('b')}, True, ''),
+            (True, {pair(old_head):diff('a'), pair('a'*40):diff('a')}, False, 'diff did not change'),
+            (True, {pair(old_head):diff('a')}, True, 'comparison unavailable'),
+            (True, {}, True, 'comparison unavailable'),
+        ]
+        for flag, diffs, expected, text in cases:
+            with self.subTest(flag=flag, expected=expected, text=text):
+                result, output = self.run_gate(clean, review_changed_head=flag, diffs=diffs)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f'review={str(expected).lower()}', output)
+                self.assertIn(text, result.stdout)
+        # The round limit still applies to a changed head.
+        result, output = self.run_gate(clean, review_changed_head=True, max_rounds='1',
+            diffs={pair(old_head):diff('a'), pair('a'*40):diff('b')})
+        self.assertIn('review=false', output)
+        self.assertIn('limit 1', result.stdout)
+        # A review of the same head is still skipped.
+        result, output = self.run_gate(self.reviews(0,1,clean=True,samehead=True), review_changed_head=True)
+        self.assertIn('review=false', output)
 
     def test_manual_only_and_latest_usable_summary(self):
         # Manual reviews count even with no marked summary; another author does not count.
@@ -1684,32 +1774,37 @@ sys.exit(2)
         triggers=workflow.get('on',workflow.get('true',{}))
         self.assertEqual(set(triggers), {'workflow_call'})
         call=triggers['workflow_call']
-        self.assertEqual(set(call['inputs']), {'required-ci-job', 'pr'})
-        self.assertEqual(call['inputs']['required-ci-job']['type'], 'string')
-        self.assertTrue(call['inputs']['required-ci-job']['required'])
-        for name in ('pr',):
-            self.assertEqual(call['inputs'][name]['type'], 'string')
+        defaults={'required-ci-job':'','required-ci-jobs':'','skippable-ci-jobs':'','pr':'',
+                  'ci-events':'push,workflow_dispatch','ci-workflow':'ci.yml','reviewer':'yngwald',
+                  'review-changed-head':False}
+        self.assertEqual(set(call['inputs']), set(defaults))
+        for name, default in defaults.items():
+            self.assertEqual(call['inputs'][name]['type'], 'boolean' if name=='review-changed-head' else 'string')
             self.assertFalse(call['inputs'][name]['required'])
-            self.assertEqual(call['inputs'][name]['default'], '')
-        self.assertEqual(set(call['secrets']), {'AUTO_REVIEWER_YNGWALD', 'CLAUDE_CODE_OAUTH_TOKEN'})
-        self.assertTrue(all(x['required'] for x in call['secrets'].values()))
+            self.assertEqual(call['inputs'][name]['default'], default)
+        self.assertEqual(set(call['secrets']), {'AUTO_REVIEWER_TOKEN', 'AUTO_REVIEWER_YNGWALD', 'CLAUDE_CODE_OAUTH_TOKEN'})
+        self.assertEqual({k for k,x in call['secrets'].items() if x.get('required')}, {'CLAUDE_CODE_OAUTH_TOKEN'})
         gate=next(s for s in workflow['jobs']['gate']['steps'] if s.get('id')=='gate')
-        self.assertEqual(gate['env']['REVIEWER'],ADAPTER['reviewer'])
+        self.assertEqual(gate['env']['REVIEWER'],'${{ inputs.reviewer }}')
         self.assertEqual(gate['env']['REQUIRED_CI_JOB'], '${{ inputs.required-ci-job }}')
+        self.assertEqual(gate['env']['REQUIRED_CI_JOBS'], '${{ inputs.required-ci-jobs }}')
+        self.assertEqual(gate['env']['SKIPPABLE_CI_JOBS'], '${{ inputs.skippable-ci-jobs }}')
+        self.assertEqual(gate['env']['CI_WORKFLOW'], '${{ inputs.ci-workflow }}')
+        self.assertEqual(gate['env']['REVIEW_CHANGED_HEAD'], '${{ inputs.review-changed-head }}')
         self.assertEqual(gate['env']['CLAUDE_REVIEW_MAX_ROUNDS'], '${{ vars.CLAUDE_REVIEW_MAX_ROUNDS }}')
         self.assertNotIn('REQUIRED_JOBS', gate['env'])
-        self.assertEqual(json.loads(gate['env']['CI_EVENTS']),ADAPTER['events'])
-        self.assertEqual(json.loads(gate['env']['SKIPPABLE_JOBS']),ADAPTER['skippable_jobs'])
+        self.assertEqual(gate['env']['CI_EVENTS'],'${{ inputs.ci-events }}')
         self.assertIn('inputs.'+ADAPTER['dispatch'],gate['env']['EVENT_PR'])
         self.assertNotIn('inputs.pr_number',gate['env']['EVENT_PR'])
         self.assertIn('inputs.'+ADAPTER['dispatch'],workflow['concurrency']['group'])
         self.assertNotIn('inputs.pr_number',workflow['concurrency']['group'])
-        self.assertEqual(workflow['jobs']['publish']['env']['REVIEWER'],ADAPTER['reviewer'])
-        self.assertEqual(workflow['jobs']['complete']['env']['REVIEWER'],ADAPTER['reviewer'])
+        for job in ('merged_summary','refresh_merged_summary','publish','complete'):
+            self.assertEqual(workflow['jobs'][job]['env']['REVIEWER'],'${{ inputs.reviewer }}')
+        self.assertNotIn("'yngwald'",WORKFLOW.read_text())
         secrets=[s.get('env',{}).get('GH_TOKEN','') for job in workflow['jobs'].values()
                  for s in job.get('steps',[]) if 'secrets.' in s.get('env',{}).get('GH_TOKEN','')]
         self.assertTrue(secrets)
-        self.assertEqual(set(secrets),{'${{ secrets.'+ADAPTER['secret']+' }}'})
+        self.assertEqual(set(secrets),{'${{ secrets.AUTO_REVIEWER_TOKEN || secrets.'+ADAPTER['secret']+' }}'})
         review=workflow['jobs']['review']
         agent=next(s for s in review['steps'] if s.get('id')=='claude')
         self.assertIn('--model ${{ steps.model.outputs.model }}',agent['with']['claude_args'])
@@ -1722,7 +1817,7 @@ sys.exit(2)
         self.assertTrue(workflow['concurrency']['cancel-in-progress'])
         self.assertTrue(review['concurrency']['cancel-in-progress'])
         triggers=workflow.get('on',workflow.get('true',{}))
-        self.assertIn('CI (${{ inputs.required-ci-job }}) is green', agent['with']['prompt'])
+        self.assertIn('CI (${{ needs.gate.outputs.ci_jobs }}) is green', agent['with']['prompt'])
         self.assertNotIn('CI (validate) is green', agent['with']['prompt'])
         install=step('Install cr-request skill')
         self.assertIn('REVIEW_SKILLS_REF',install)
@@ -1747,7 +1842,7 @@ class SummaryRunTest(unittest.TestCase):
             root=Path(tmp)
             os.symlink(ROOT/'tests/fixtures/auto-reviewer-shared/gh_summary',root/'gh')
             (root/'state.json').write_text(json.dumps(state))
-            env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'], 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42'}
+            env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'], 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42','REVIEWER':'so-upstars','GH_TOKEN':'token'}
             def invoke(name):
                 return subprocess.run(['bash','-eo','pipefail','-c',step(name)],cwd=root,env=env,capture_output=True,text=True)
             gather=invoke('Gather merged review summary')
@@ -2040,7 +2135,7 @@ class SummaryRunTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); os.symlink(ROOT/'tests/fixtures/auto-reviewer-shared/gh_summary',root/'gh')
             (root/'state.json').write_text(json.dumps({'merged':False,'reviews':[self.review()]}))
-            env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42'}
+            env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42','REVIEWER':'so-upstars','GH_TOKEN':'token'}
             result=subprocess.run(['bash','-eo','pipefail','-c',step('Gather merged review summary')],cwd=root,env=env,capture_output=True,text=True)
             self.assertNotEqual(result.returncode,0)
             self.assertFalse((root/'summary.txt').exists())

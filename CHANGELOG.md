@@ -3,6 +3,28 @@
 One release tag covers every workflow in this repository. Each release lists its changes
 per workflow, newest first.
 
+## v0.0.6
+
+### auto-reviewer-shared
+
+1. New input `reviewer` (default `yngwald`) replaces every hard-coded reviewer login: the
+   gate, review-request filter, concurrency group, thread resolver, merged summary and the
+   token-owner check.
+2. New optional secret `AUTO_REVIEWER_TOKEN`; `AUTO_REVIEWER_YNGWALD` is now optional.
+   The token is `AUTO_REVIEWER_TOKEN` when set, else `AUTO_REVIEWER_YNGWALD`; the gate (and
+   the merged summary) fails with a clear message when neither is set.
+3. New inputs `required-ci-jobs` (newline- or comma-separated), `skippable-ci-jobs`,
+   `ci-events` (default `push,workflow_dispatch`) and `ci-workflow` (default `ci.yml`);
+   `required-ci-job` is no longer required, and the gate fails when no job is named. Job
+   names may now contain spaces, dots, commas (in newline-separated lists), parentheses and slashes.
+4. New opt-in input `review-changed-head` (default `false`): a new head after a clean
+   review is reviewed when the PR's own diff changed since the last reviewed head, and
+   skipped when only the base branch moved. The round limit still applies.
+5. The contract checker accepts any CI job name, several `--required-ci-job` values and
+   either CI job input, and requires one of the two reviewer token secrets. The README
+   gains a caller example for another reviewer account.
+6. All changes are backward compatible: callers of `v0.0.5` need no edits.
+
 ## v0.0.5 - 2026-11-10
 
 ### auto-reviewer-shared

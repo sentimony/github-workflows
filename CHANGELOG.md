@@ -3,7 +3,7 @@
 One release tag covers every workflow in this repository. Each release lists its changes
 per workflow, newest first.
 
-## v0.0.7
+## v0.0.7 - 2026-11-12
 
 ### auto-reviewer-shared
 
@@ -23,7 +23,11 @@ per workflow, newest first.
    the draft; the closing lines, usage (summed over both runs) and inline comments are then
    produced again. Publish validation is unchanged and still decides.
 
-## v0.0.6
+### Repository
+
+1. This repository's caller `auto-reviewer.yaml` now targets `auto-reviewer-shared.yaml@v0.0.7`.
+
+## v0.0.6 - 2026-11-12
 
 ### auto-reviewer-shared
 

@@ -14,6 +14,14 @@ per workflow, newest first.
    with the signature and Next step lines". A valid model `Next step` is kept; otherwise it
    is derived from the Summary table (`/cr-received PR #<n>` with findings, else
    `/verify -> /finalize squash`). The published format is unchanged. Fixes #11.
+2. Missing `</details>`: a Details block the agent opened but did not close is closed by the
+   same step before the closing lines.
+3. One retry: `Pre-validate review draft` runs the publish job's own review-actions validator
+   (one shared definition) and a Details/readiness/Summary table check on the draft. On any
+   error it writes `.auto-reviewer/retry-error.txt` and a second `claude-code-action` run
+   (same prompt, which tells it to fix only the listed errors in the existing files) repairs
+   the draft; the closing lines, usage (summed over both runs) and inline comments are then
+   produced again. Publish validation is unchanged and still decides.
 
 ## v0.0.6
 

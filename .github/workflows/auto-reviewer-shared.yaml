@@ -1039,11 +1039,16 @@ jobs:
           # User-scope setting: Read, Grep, and Glob outside the working directory are refused (Bash is
           # denied in claude_args); Claude Code keeps ~/.claude/skills readable.
           settings: '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}'
-          prompt: |
+          prompt: &review_prompt |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ needs.gate.outputs.number }}
             BASE SHA: ${{ needs.gate.outputs.base_sha }}
             HEAD SHA: ${{ needs.gate.outputs.head_sha }}
+
+            Retry check: if .auto-reviewer/retry-error.txt exists, this is a second attempt after the
+            first draft failed validation. Do not redo the review. Read that file, then fix exactly the
+            listed errors in the existing .auto-reviewer/review.md, comments.json and review-actions.json
+            (Edit, keeping every other part unchanged) and finish. Without that file, ignore this paragraph.
 
             Run the cr-request skill for this pull request on a prepared target. The target is the
             committed range from the merge base of BASE SHA and HEAD SHA to HEAD SHA, already captured in
@@ -1184,7 +1189,7 @@ jobs:
           # workspace. Write follows the Edit rules for the body and comments files. Bash is denied,
           # built-in read-only commands included: any allowed command can echo an expanded variable. .git/
           # is denied for Read, Grep, and Glob: .git/config holds the action's token in the origin URL.
-          claude_args: >-
+          claude_args: &review_claude_args >-
             --model ${{ steps.model.outputs.model }} --effort ${{ steps.model.outputs.effort }}
             --max-turns 60
             --allowedTools "Skill,Agent,Task,Grep,Glob,Read(./**),Read(~/.claude/skills/**),Edit(./.auto-reviewer/review.md),Write(./.auto-reviewer/review.md),Edit(./.auto-reviewer/comments.json),Write(./.auto-reviewer/comments.json),Edit(./.auto-reviewer/review-actions.json),Write(./.auto-reviewer/review-actions.json)"
@@ -1198,7 +1203,8 @@ jobs:
       # execution file. Model, effort, grouped token count and cost each have their own code span.
       # Tokens include input, output, and cache tokens; a missing or unreadable file adds nothing,
       # and the merged summary then shows the usage as unknown.
-      - name: Add review duration
+      - &add_review_duration
+        name: Add review duration
         env:
           START: ${{ steps.start.outputs.epoch }}
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
@@ -1212,20 +1218,31 @@ jobs:
           [ -f "$body" ] || exit 0
           elapsed=$(( $(date +%s) - START ))
           export DURATION="In \`$(( elapsed / 60 )) min $(( elapsed % 60 )) sec\`"
-          if [ -n "${EXEC_FILE:-}" ] && [ -f "$EXEC_FILE" ]; then
+          # The usage of a retry run adds to the first run's; a file that is missing or unreadable adds nothing.
+          # The retry step is declared later, so its execution file path arrives through a runner file.
+          EXEC_FILE_RETRY=""
+          [ -f "${RUNNER_TEMP:-/nonexistent}/retry-exec-file" ] && EXEC_FILE_RETRY=$(cat "$RUNNER_TEMP/retry-exec-file")
+          total_tokens=0; total_cost=0; counted=0
+          for exec_file in "${EXEC_FILE:-}" "${EXEC_FILE_RETRY:-}"; do
+            [ -n "$exec_file" ] && [ -f "$exec_file" ] || continue
             usage=$(jq -r '[.[] | select(type == "object" and .type == "result")] | last
               | select(. != null and (.total_cost_usd | type) == "number" and .total_cost_usd >= 0)
               | [((.usage.input_tokens // 0) + (.usage.output_tokens // 0)
                 + (.usage.cache_creation_input_tokens // 0) + (.usage.cache_read_input_tokens // 0) | floor),
-                .total_cost_usd] | @tsv' "$EXEC_FILE" 2> /dev/null || true)
+                .total_cost_usd] | @tsv' "$exec_file" 2> /dev/null || true)
             if [[ "$usage" =~ ^([0-9]+)[[:space:]]([0-9.eE+-]+)$ ]]; then
-              cost=$(LC_ALL=C awk -v c="${BASH_REMATCH[2]}" 'BEGIN { printf "%.4f", c }')
-              tokens=$(LC_ALL=C awk -v n="${BASH_REMATCH[1]}" 'BEGIN {
-                out=""; while (length(n) > 3) { out="," substr(n,length(n)-2) out; n=substr(n,1,length(n)-3) }
-                print n out
-              }')
-              DURATION="$DURATION · \`$USAGE_MODEL\` \`$USAGE_EFFORT\` · \`$tokens tokens\` · \`\$$cost\`"
+              total_tokens=$(LC_ALL=C awk -v a="$total_tokens" -v b="${BASH_REMATCH[1]}" 'BEGIN { printf "%.0f", a + b }')
+              total_cost=$(LC_ALL=C awk -v a="$total_cost" -v b="${BASH_REMATCH[2]}" 'BEGIN { printf "%.10f", a + b }')
+              counted=1
             fi
+          done
+          if [ "$counted" = 1 ]; then
+            cost=$(LC_ALL=C awk -v c="$total_cost" 'BEGIN { printf "%.4f", c }')
+            tokens=$(LC_ALL=C awk -v n="$total_tokens" 'BEGIN {
+              out=""; while (length(n) > 3) { out="," substr(n,length(n)-2) out; n=substr(n,1,length(n)-3) }
+              print n out
+            }')
+            DURATION="$DURATION · \`$USAGE_MODEL\` \`$USAGE_EFFORT\` · \`$tokens tokens\` · \`\$$cost\`"
           fi
           export DURATION
           python3 -I - <<'PY'
@@ -1244,6 +1261,10 @@ jobs:
               if line.startswith("Next step:") and model_next is None and next_re.match(line):
                   model_next = line
           body = "\n".join(lines)
+          # A Details block the agent opened but never closed is closed here, before the closing lines.
+          if (len(re.findall(r"^<details(?:[ \t][^>]*)?><summary>Details</summary>[ \t]*$", body, re.M)) == 1
+                  and not re.search(r"^</details>[ \t]*$", body, re.M)):
+              body += "\n\n</details>"
           if model_next is None:
               # Fallback from the Summary table counts; only the model's reasoned choice is lost.
               counts = re.search(r"^\| *Intent *\|[^\n]*\n[^\n]*\n\|[^|]*\|[^|]*\|[^|]*\| *([0-9]+) *\| *([0-9]+) *\| *([0-9]+) *\|", body, re.M)
@@ -1261,7 +1282,8 @@ jobs:
       # on a head-side line of a diff.patch hunk stay; the rest of the findings live in the body. The
       # agent chooses the comments: the log gets counts only. -I keeps a json.py or re.py at the root of
       # the PR checkout from shadowing the standard library.
-      - name: Check inline comments
+      - &check_inline_comments
+        name: Check inline comments
         run: |
           python3 -I - <<'PY'
           import json, pathlib, re
@@ -1314,6 +1336,145 @@ jobs:
           out.write_text(json.dumps(kept), encoding="utf-8")
           print(f"Inline comments: {len(kept)} kept of {len(proposed)}")
           PY
+
+      # Pre-validates the draft with the publish job's own actions validator plus a compact structure
+      # check. publish stays the authority; a failure here only triggers one retry with the errors.
+      - name: Pre-validate review draft
+        id: precheck
+        env:
+          REPO: ${{ github.repository }}
+          ACTIONS_FILE: .auto-reviewer/review-actions.json
+          BODY_FILE: .auto-reviewer/review.md
+          COMMENTS_FILE: .auto-reviewer/comments.json
+          VALIDATE_ACTIONS: &validate_review_actions |
+            python3 -I - <<'PY'
+            import json, os, re
+            from pathlib import Path
+
+            def unique(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError('duplicate JSON key')
+                    result[key] = value
+                return result
+
+            def load(path):
+                return json.loads(Path(path).read_text(encoding='utf-8'), object_pairs_hook=unique)
+
+            def require(value, message):
+                if not value:
+                    raise ValueError(message)
+
+            actions = Path(os.environ['ACTIONS_FILE'])
+            if not actions.is_file():
+                print('::warning::No structured review actions; previous findings remain evidence gaps')
+                raise SystemExit(0)
+            d = load(actions)
+            require(isinstance(d, dict) and set(d) == {'schema_version', 'repository', 'pr_number', 'head_sha',
+                    'review_source_id', 'findings', 'previous_findings'}, 'invalid draft shape')
+            require(type(d['schema_version']) is int and d['schema_version'] == 1, 'invalid schema version')
+            require(d['repository'] == os.environ['REPO'] and type(d['pr_number']) is int
+                    and d['pr_number'] == int(os.environ['NUMBER']) and d['head_sha'] == os.environ['HEAD_SHA']
+                    and re.fullmatch('[0-9a-f]{40}', d['head_sha']) and d['review_source_id'] is None,
+                    'draft target mismatch')
+            require(isinstance(d['findings'], list) and isinstance(d['previous_findings'], list), 'invalid findings')
+            base = {'origin_review_id', 'original_id', 'path', 'severity'}
+            extra = {'status', 'defer_decision', 'reason', 'owner'}
+            seen = set()
+            for current, entries in ((True, d['findings']), (False, d['previous_findings'])):
+                for f in entries:
+                    require(isinstance(f, dict) and set(f) == (base if current else base | extra), 'invalid finding shape')
+                    origin, ident, path = f['origin_review_id'], f['original_id'], f['path']
+                    require(origin is None if current else type(origin) is int and origin > 0, 'invalid origin')
+                    require(isinstance(ident, str) and re.fullmatch(r'R[1-9][0-9]*-(?:[A-Za-z0-9_-]+-)?F[1-9][0-9]*', ident), 'invalid finding ID')
+                    require(isinstance(path, str) and '\\' not in path and all(x not in ('', '.', '..', '.git', '.cross-review') for x in path.split('/')), 'invalid path')
+                    require(f['severity'] in ('Critical', 'Important', 'Minor'), 'invalid severity')
+                    key = (origin, ident)
+                    require(key not in seen, 'duplicate finding')
+                    seen.add(key)
+                    if not current:
+                        status, defer, reason, owner = f['status'], f['defer_decision'], f['reason'], f['owner']
+                        require(status in ('ADDRESSED', 'NOT_ADDRESSED') and defer in ('NONE', 'PROPOSED', 'ACCEPTED', 'DECLINED'), 'invalid previous state')
+                        require(isinstance(reason, str) and bool(reason.strip()) and (owner is None or isinstance(owner, str) and bool(owner.strip())), 'invalid decision')
+                        require(defer not in ('PROPOSED', 'ACCEPTED') or owner is not None, 'missing defer owner')
+                        require(defer != 'ACCEPTED' or status == 'NOT_ADDRESSED' and f['severity'] != 'Critical', 'invalid accepted defer')
+                        require(status != 'ADDRESSED' or defer == 'NONE', 'addressed finding has defer')
+            # New drafts use circles; historical thread formats are handled by the matchers.
+            circles = {r'$\color{red}◎$ High': 'Critical', r'$\color{orange}◎$ Medium': 'Important', r'$\color{green}◎$ Low': 'Minor'}
+            circle_re = '(?:' + '|'.join(re.escape(circle) for circle in circles) + ')'
+            report = Path(os.environ['BODY_FILE']).read_text(encoding='utf-8')
+            found = [(circles[m[1]], m[2], m[3]) for m in re.finditer(
+                r'^- ('+circle_re+r') (R[1-9][0-9]*-(?:[A-Za-z0-9_-]+-)?F[1-9][0-9]*) \[`([^`]+):[0-9]+`\]', report, re.M)]
+            expected = [(f['severity'], f['original_id'], f['path']) for f in d['findings']]
+            require(sorted(found) == sorted(expected), 'report findings differ from draft')
+            table = re.search(r'^\| *Intent *\| *System *\| *Craft *\| *Critical *\| *Important *\| *Minor *\|\s*\n[^\n]*\n\| *(?:PASS|FINDINGS|UNASSESSED) *\| *(?:PASS|FINDINGS|UNASSESSED) *\| *(?:PASS|FINDINGS|UNASSESSED) *\| *([0-9]+) *\| *([0-9]+) *\| *([0-9]+) *\|', report, re.M)
+            require(table is not None and tuple(map(int, table.groups())) == tuple(sum(f['severity']==severity for f in d['findings']) for severity in ('Critical','Important','Minor')), 'summary counts differ from draft')
+            comments_path = Path(os.environ['COMMENTS_FILE'])
+            comments = load(comments_path) if comments_path.is_file() else []
+            require(isinstance(comments, list), 'invalid inline comments')
+            inline = set()
+            for comment in comments:
+                require(isinstance(comment, dict) and set(comment) == {'body', 'line', 'path'}
+                        and type(comment['line']) is int and comment['line'] > 0 and isinstance(comment['body'], str), 'invalid inline comment')
+                m = re.match(r'^('+circle_re+r') (R[1-9][0-9]*-(?:[A-Za-z0-9_-]+-)?F[1-9][0-9]*)(?:\s|$)', comment['body'])
+                require(m is not None and (circles[m[1]], m[2], comment['path']) in expected, 'inline finding mismatch')
+                require(m[2] not in inline, 'duplicate inline finding')
+                inline.add(m[2])
+            PY
+        run: |
+          [ -f "$BODY_FILE" ] || exit 0
+          errors=""
+          if ! err=$(bash -eo pipefail -c "$VALIDATE_ACTIONS" 2>&1 > /dev/null); then
+            errors+="review-actions.json or inline comments: $(tail -n 1 <<< "$err")"$'\n'
+          fi
+          if ! err=$(python3 -I - 2>&1 <<'PY'
+          import os, re
+          from pathlib import Path
+
+          source = Path(os.environ["BODY_FILE"]).read_text(encoding="utf-8").replace("\r", "")
+          opening = re.findall(r"^<details(?:[ \t][^>]*)?><summary>Details</summary>[ \t]*$", source, re.M)
+          closing = re.findall(r"^</details>[ \t]*$", source, re.M)
+          if len(opening) != 1 or len(closing) != 1 or len(re.findall(r"<details\b", source, re.I)) != 1:
+              raise SystemExit("review.md must contain exactly one Details block (one opening and one closing line)")
+          preamble = source[:source.index(opening[0])]
+          if len(re.findall(r"^\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Nn]ot ready|[Rr]eady)\s*$", preamble, re.M)) != 1:
+              raise SystemExit("review.md must have exactly one Readiness line before the Details block")
+          row = r"\| *(?:PASS|FINDINGS|UNASSESSED) *\| *(?:PASS|FINDINGS|UNASSESSED) *\| *(?:PASS|FINDINGS|UNASSESSED) *\| *[0-9]+ *\| *[0-9]+ *\| *[0-9]+ *\|"
+          if len(re.findall(r"^\| *Intent *\| *System *\| *Craft *\| *Critical *\| *Important *\| *Minor *\|\s*\n\|[^\n]+\|\s*\n" + row, preamble, re.M)) != 1:
+              raise SystemExit("review.md must have exactly one valid Summary table before the Details block")
+          PY
+          ); then
+            errors+="review body structure: $(tail -n 1 <<< "$err")"$'\n'
+          fi
+          if [ -n "$errors" ]; then
+            printf '%s' "$errors" > .auto-reviewer/retry-error.txt
+            echo "error=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::The review draft failed pre-validation; retrying once"
+            printf '%s' "$errors"
+          fi
+
+      - uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1
+        id: claude_retry
+        if: steps.precheck.outputs.error == 'true'
+        continue-on-error: true
+        with:
+          path_to_claude_code_executable: ${{ steps.claude_cli.outputs.path }}
+          github_token: ${{ github.token }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          settings: '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}'
+          prompt: *review_prompt
+          claude_args: *review_claude_args
+
+      - name: Record retry execution file
+        if: steps.claude_retry.outputs.execution_file != ''
+        env:
+          RETRY_EXEC_FILE: ${{ steps.claude_retry.outputs.execution_file }}
+        run: printf '%s' "$RETRY_EXEC_FILE" > "$RUNNER_TEMP/retry-exec-file"
+
+      # After a retry the closing lines, usage and inline comments are produced again from the new draft.
+      - *add_review_duration
+      - *check_inline_comments
 
       # The action hides the agent's output: list the paths it read and the calls the permission rules
       # refused (paths and commands only), and the result when it wrote no body.
@@ -1400,82 +1561,7 @@ jobs:
       - name: Validate review actions
         id: actions
         if: always()
-        run: |
-          python3 -I - <<'PY'
-          import json, os, re
-          from pathlib import Path
-
-          def unique(pairs):
-              result = {}
-              for key, value in pairs:
-                  if key in result:
-                      raise ValueError('duplicate JSON key')
-                  result[key] = value
-              return result
-
-          def load(path):
-              return json.loads(Path(path).read_text(encoding='utf-8'), object_pairs_hook=unique)
-
-          def require(value, message):
-              if not value:
-                  raise ValueError(message)
-
-          actions = Path(os.environ['ACTIONS_FILE'])
-          if not actions.is_file():
-              print('::warning::No structured review actions; previous findings remain evidence gaps')
-              raise SystemExit(0)
-          d = load(actions)
-          require(isinstance(d, dict) and set(d) == {'schema_version', 'repository', 'pr_number', 'head_sha',
-                  'review_source_id', 'findings', 'previous_findings'}, 'invalid draft shape')
-          require(type(d['schema_version']) is int and d['schema_version'] == 1, 'invalid schema version')
-          require(d['repository'] == os.environ['REPO'] and type(d['pr_number']) is int
-                  and d['pr_number'] == int(os.environ['NUMBER']) and d['head_sha'] == os.environ['HEAD_SHA']
-                  and re.fullmatch('[0-9a-f]{40}', d['head_sha']) and d['review_source_id'] is None,
-                  'draft target mismatch')
-          require(isinstance(d['findings'], list) and isinstance(d['previous_findings'], list), 'invalid findings')
-          base = {'origin_review_id', 'original_id', 'path', 'severity'}
-          extra = {'status', 'defer_decision', 'reason', 'owner'}
-          seen = set()
-          for current, entries in ((True, d['findings']), (False, d['previous_findings'])):
-              for f in entries:
-                  require(isinstance(f, dict) and set(f) == (base if current else base | extra), 'invalid finding shape')
-                  origin, ident, path = f['origin_review_id'], f['original_id'], f['path']
-                  require(origin is None if current else type(origin) is int and origin > 0, 'invalid origin')
-                  require(isinstance(ident, str) and re.fullmatch(r'R[1-9][0-9]*-(?:[A-Za-z0-9_-]+-)?F[1-9][0-9]*', ident), 'invalid finding ID')
-                  require(isinstance(path, str) and '\\' not in path and all(x not in ('', '.', '..', '.git', '.cross-review') for x in path.split('/')), 'invalid path')
-                  require(f['severity'] in ('Critical', 'Important', 'Minor'), 'invalid severity')
-                  key = (origin, ident)
-                  require(key not in seen, 'duplicate finding')
-                  seen.add(key)
-                  if not current:
-                      status, defer, reason, owner = f['status'], f['defer_decision'], f['reason'], f['owner']
-                      require(status in ('ADDRESSED', 'NOT_ADDRESSED') and defer in ('NONE', 'PROPOSED', 'ACCEPTED', 'DECLINED'), 'invalid previous state')
-                      require(isinstance(reason, str) and bool(reason.strip()) and (owner is None or isinstance(owner, str) and bool(owner.strip())), 'invalid decision')
-                      require(defer not in ('PROPOSED', 'ACCEPTED') or owner is not None, 'missing defer owner')
-                      require(defer != 'ACCEPTED' or status == 'NOT_ADDRESSED' and f['severity'] != 'Critical', 'invalid accepted defer')
-                      require(status != 'ADDRESSED' or defer == 'NONE', 'addressed finding has defer')
-          # New drafts use circles; historical thread formats are handled by the matchers.
-          circles = {r'$\color{red}◎$ High': 'Critical', r'$\color{orange}◎$ Medium': 'Important', r'$\color{green}◎$ Low': 'Minor'}
-          circle_re = '(?:' + '|'.join(re.escape(circle) for circle in circles) + ')'
-          report = Path(os.environ['BODY_FILE']).read_text(encoding='utf-8')
-          found = [(circles[m[1]], m[2], m[3]) for m in re.finditer(
-              r'^- ('+circle_re+r') (R[1-9][0-9]*-(?:[A-Za-z0-9_-]+-)?F[1-9][0-9]*) \[`([^`]+):[0-9]+`\]', report, re.M)]
-          expected = [(f['severity'], f['original_id'], f['path']) for f in d['findings']]
-          require(sorted(found) == sorted(expected), 'report findings differ from draft')
-          table = re.search(r'^\| *Intent *\| *System *\| *Craft *\| *Critical *\| *Important *\| *Minor *\|\s*\n[^\n]*\n\| *(?:PASS|FINDINGS|UNASSESSED) *\| *(?:PASS|FINDINGS|UNASSESSED) *\| *(?:PASS|FINDINGS|UNASSESSED) *\| *([0-9]+) *\| *([0-9]+) *\| *([0-9]+) *\|', report, re.M)
-          require(table is not None and tuple(map(int, table.groups())) == tuple(sum(f['severity']==severity for f in d['findings']) for severity in ('Critical','Important','Minor')), 'summary counts differ from draft')
-          comments_path = Path(os.environ['COMMENTS_FILE'])
-          comments = load(comments_path) if comments_path.is_file() else []
-          require(isinstance(comments, list), 'invalid inline comments')
-          inline = set()
-          for comment in comments:
-              require(isinstance(comment, dict) and set(comment) == {'body', 'line', 'path'}
-                      and type(comment['line']) is int and comment['line'] > 0 and isinstance(comment['body'], str), 'invalid inline comment')
-              m = re.match(r'^('+circle_re+r') (R[1-9][0-9]*-(?:[A-Za-z0-9_-]+-)?F[1-9][0-9]*)(?:\s|$)', comment['body'])
-              require(m is not None and (circles[m[1]], m[2], comment['path']) in expected, 'inline finding mismatch')
-              require(m[2] not in inline, 'duplicate inline finding')
-              inline.add(m[2])
-          PY
+        run: *validate_review_actions
 
       # Runs with GITHUB_TOKEN and owns the status; the artifact exists only when the review job succeeded.
       # always(): after a workflow-level cancel a step without a status check is skipped, and the

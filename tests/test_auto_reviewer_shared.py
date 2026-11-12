@@ -1244,7 +1244,7 @@ class UsageRecordTest(unittest.TestCase):
             root=Path(tmp); (root/'.auto-reviewer').mkdir()
             sig=f'Reviewed with: `auto-reviewer-shared.yaml` `{workflow_ref}` workflow · `cr-request` `v{version}` skill'
             (root/'.auto-reviewer/review.md').write_text('<!-- m -->\nbody\n\n'+sig+'\nNext step: `/cr-received PR #1`\n')
-            env={**os.environ,'START':'0','SIGNATURE':sig,'SEP':' · ','USAGE_MODEL':model,'USAGE_EFFORT':effort}
+            env={**os.environ,'START':'0','SIGNATURE':sig,'SEP':' · ','USAGE_MODEL':model,'USAGE_EFFORT':effort,'BODY_FILE_PATH':'.auto-reviewer/review.md','NUMBER':'1'}
             if execution is not None:
                 (root/'exec.json').write_text(raw if raw is not None else json.dumps(execution)); env['EXEC_FILE']=str(root/'exec.json')
             run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))',f'elapsed={elapsed}')
@@ -1272,6 +1272,59 @@ class UsageRecordTest(unittest.TestCase):
         self.assertEqual(self.run_duration([],raw='not json'),duration)
         self.assertEqual(self.run_duration([{'type':'system'}]),duration)
         self.assertEqual(self.run_duration([{'type':'result','usage':{}}]),duration)
+
+class DeterministicTrailerTest(unittest.TestCase):
+    SIG='Reviewed with: `auto-reviewer-shared.yaml` `v0.0.6` workflow · `cr-request` `v0.0.11` skill'
+    NEXT='Next step: `/verify -> /finalize squash`'
+    TABLE='| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | %s | %s | %s |'
+
+    def finish(self, trailer, counts=(0,0,0)):
+        body='<!-- m -->\n'+self.TABLE%counts+'\n\n<details><summary>Details</summary>\n\nEvidence.\n\n</details>\n'+trailer
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); (root/'.auto-reviewer').mkdir()
+            (root/'.auto-reviewer/review.md').write_text(body)
+            env={**os.environ,'START':'0','SIGNATURE':self.SIG,'SEP':' · ','USAGE_MODEL':'m','USAGE_EFFORT':'medium','BODY_FILE_PATH':'.auto-reviewer/review.md','NUMBER':'7'}
+            env.pop('EXEC_FILE',None)
+            run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))','elapsed=125')
+            result=subprocess.run(['bash','-eo','pipefail','-c',run],cwd=root,env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            return (root/'.auto-reviewer/review.md').read_text()
+
+    def test_missing_malformed_and_correct_trailers_publish_the_same_body(self):
+        good=self.SIG+' · In `9 min 9 sec`\n'+self.NEXT+'\n'
+        cases={'missing':'',
+               'correct':good,
+               'malformed signature':'Reviewed with: something else\n'+self.NEXT+'\n',
+               'malformed next step':self.SIG+'\nNext step: verify it - then merge\n',
+               'reversed order':self.NEXT+'\n'+self.SIG+' · In `1 min 1 sec`\n',
+               'blank lines and CRLF':'\r\n'+self.SIG+'\r\n\r\n'+self.NEXT+'\r\n\r\n'}
+        results={name:self.finish(trailer) for name,trailer in cases.items()}
+        expected=results['correct']
+        self.assertTrue(expected.endswith('\n\n'+self.SIG+' · In `2 min 5 sec`\n'+self.NEXT+'\n'),expected)
+        for name,body in results.items():
+            with self.subTest(case=name):
+                self.assertEqual(body,expected)
+
+    def test_validator_accepts_the_normalized_body(self):
+        script=step('Validate review body')
+        fragment='fail() { exit 1; }\n'+script[script.index('tail2=$(tr -d'):script.index('# The Next step line loses')]
+        for trailer in ('','Reviewed with: broken\n'):
+            with self.subTest(trailer=trailer),tempfile.TemporaryDirectory() as tmp:
+                path=Path(tmp)/'body'; path.write_text(self.finish(trailer))
+                env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11','WORKFLOW_IDENTITY':'auto-reviewer-shared.yaml@v0.0.6'}
+                result=subprocess.run(['bash','-c',fragment],env=env,capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_fallback_next_step_follows_the_finding_counts(self):
+        self.assertTrue(self.finish('',(0,0,0)).endswith(self.NEXT+'\n'))
+        for counts in ((1,0,0),(0,2,0),(0,0,3)):
+            with self.subTest(counts=counts):
+                self.assertTrue(self.finish('',counts).endswith('Next step: `/cr-received PR #7`\n'))
+
+    def test_valid_agent_next_step_is_kept(self):
+        body=self.finish(self.SIG+'\nNext step: `/cr-received PR #7` · two findings\n',(0,1,0))
+        self.assertTrue(body.endswith('Next step: `/cr-received PR #7` · two findings\n'))
+
 
 class TokenFilterTest(unittest.TestCase):
     def test_atlassian_prefix_is_blocked_in_every_transport(self):

@@ -3,6 +3,18 @@
 One release tag covers every workflow in this repository. Each release lists its changes
 per workflow, newest first.
 
+## v0.0.7
+
+### auto-reviewer-shared
+
+1. The review body's closing lines are deterministic. `Add review duration` drops any
+   trailing `Reviewed with:` and `Next step:` lines the model wrote and appends the
+   canonical signature (workflow ref, skill version, measured duration, usage) itself, so a
+   missing or malformed trailer no longer fails Publish with "The review body does not end
+   with the signature and Next step lines". A valid model `Next step` is kept; otherwise it
+   is derived from the Summary table (`/cr-received PR #<n>` with findings, else
+   `/verify -> /finalize squash`). The published format is unchanged. Fixes #11.
+
 ## v0.0.6
 
 ### auto-reviewer-shared

@@ -1190,9 +1190,10 @@ jobs:
             --allowedTools "Skill,Agent,Task,Grep,Glob,Read(./**),Read(~/.claude/skills/**),Edit(./.auto-reviewer/review.md),Write(./.auto-reviewer/review.md),Edit(./.auto-reviewer/comments.json),Write(./.auto-reviewer/comments.json),Edit(./.auto-reviewer/review-actions.json),Write(./.auto-reviewer/review-actions.json)"
             --disallowedTools "Bash,Read(./.git/**)"
 
-      # The duration is the agent step's wall time; the agent cannot measure it. Only the signature line
-      # among the last two non-blank lines is rewritten, so a quoted signature higher up stays as written;
-      # anything the agent put after the signature and a space there is replaced by the measured duration.
+      # The duration is the agent step's wall time; the agent cannot measure it. The closing lines are
+      # deterministic: any trailing signature and Next step lines the agent wrote are dropped and the
+      # canonical signature is appended, so a missing or malformed trailer cannot fail the run. A valid
+      # agent Next step is kept; otherwise it comes from the Summary table counts.
       # Under a minute the duration code span reads 0 min 42 sec. Usage comes from the action's result
       # execution file. Model, effort, grouped token count and cost each have their own code span.
       # Tokens include input, output, and cache tokens; a missing or unreadable file adds nothing,
@@ -1205,6 +1206,7 @@ jobs:
           USAGE_EFFORT: ${{ steps.model.outputs.effort }}
           SIGNATURE: 'Reviewed with: `auto-reviewer-shared.yaml` `${{ steps.workflow_identity.outputs.ref }}` workflow · `cr-request` `v${{ steps.skill.outputs.version }}` skill'
           SEP: ' · '
+          BODY_FILE_PATH: .auto-reviewer/review.md
         run: |
           body=.auto-reviewer/review.md
           [ -f "$body" ] || exit 0
@@ -1225,22 +1227,34 @@ jobs:
               DURATION="$DURATION · \`$USAGE_MODEL\` \`$USAGE_EFFORT\` · \`$tokens tokens\` · \`\$$cost\`"
             fi
           fi
-          tmp="$(mktemp)"
-          # Two passes over the body: the first finds the last two non-blank lines, the second rewrites.
-          awk '
-            { sub(/\r$/, "") }
-            NR == FNR { if ($0 !~ /^[[:space:]]*$/) { prev = last; last = FNR } next }
-            FNR == prev || FNR == last {
-              line = $0; sub(/[[:space:]]+$/, "", line)
-              sig = ENVIRON["SIGNATURE"]; sep = ENVIRON["SEP"]
-              rest = substr(line, length(sig) + 1)
-              if (substr(line, 1, length(sig)) == sig && (rest == "" || substr(rest, 1, 1) == " ")) {
-                $0 = sig sep ENVIRON["DURATION"]
-              }
-            }
-            { print }
-          ' "$body" "$body" > "$tmp"
-          mv "$tmp" "$body"
+          export DURATION
+          python3 -I - <<'PY'
+          import os, re
+          from pathlib import Path
+
+          path = Path(os.environ["BODY_FILE_PATH"])
+          lines = path.read_text(encoding="utf-8").replace("\r", "").rstrip().split("\n")
+          # Drop every trailing model-written signature and Next step line; the model's Next step is
+          # kept only when it satisfies the same grammar the publish step validates.
+          next_re = re.compile(
+              r"^Next step: (`/[a-z0-9-]+( [^`\s]+)*`( -> `/[a-z0-9-]+`( [a-z0-9-]+)?)?( · \S.*)?|none( · \S.*)?)$")
+          model_next = None
+          while lines and (lines[-1].strip() == "" or lines[-1].startswith(("Reviewed with:", "Next step:"))):
+              line = lines.pop().rstrip()
+              if line.startswith("Next step:") and model_next is None and next_re.match(line):
+                  model_next = line
+          body = "\n".join(lines)
+          if model_next is None:
+              # Fallback from the Summary table counts; only the model's reasoned choice is lost.
+              counts = re.search(r"^\| *Intent *\|[^\n]*\n[^\n]*\n\|[^|]*\|[^|]*\|[^|]*\| *([0-9]+) *\| *([0-9]+) *\| *([0-9]+) *\|", body, re.M)
+              if counts and sum(map(int, counts.groups())) == 0:
+                  model_next = "Next step: `/verify -> /finalize squash`"
+              else:
+                  number = os.environ.get("NUMBER", "")
+                  model_next = "Next step: `/cr-received" + (" PR #" + number if number.isdigit() else "") + "`"
+          signature = os.environ["SIGNATURE"] + os.environ["SEP"] + os.environ["DURATION"]
+          path.write_text(body + "\n\n" + signature + "\n" + model_next + "\n", encoding="utf-8")
+          PY
           echo "Review duration and usage: $DURATION"
 
       # GitHub rejects a whole review when one inline comment points outside the diff, so only comments

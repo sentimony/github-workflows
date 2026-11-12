@@ -3,6 +3,26 @@
 One release tag covers every workflow in this repository. Each release lists its changes
 per workflow, newest first.
 
+## v0.0.7
+
+### auto-reviewer-shared
+
+1. The review body's closing lines are deterministic. `Add review duration` drops any
+   trailing `Reviewed with:` and `Next step:` lines the model wrote and appends the
+   canonical signature (workflow ref, skill version, measured duration, usage) itself, so a
+   missing or malformed trailer no longer fails Publish with "The review body does not end
+   with the signature and Next step lines". A valid model `Next step` is kept; otherwise it
+   is derived from the Summary table and readiness (`/verify -> /finalize squash` only for
+   a plain Ready with no findings, else `/cr-received PR #<n>`). The published format is unchanged. Fixes #11.
+2. Missing `</details>`: a Details block the agent opened but did not close is closed by the
+   same step before the closing lines.
+3. One retry: `Pre-validate review draft` runs the publish job's own review-actions validator
+   (one shared definition) and a Details/readiness/Summary table check on the draft. On any
+   error it writes `.auto-reviewer/retry-error.txt` and a second `claude-code-action` run
+   (same prompt, which tells it to fix only the listed errors in the existing files) repairs
+   the draft; the closing lines, usage (summed over both runs) and inline comments are then
+   produced again. Publish validation is unchanged and still decides.
+
 ## v0.0.6
 
 ### auto-reviewer-shared

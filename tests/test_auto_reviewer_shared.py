@@ -1244,7 +1244,7 @@ class UsageRecordTest(unittest.TestCase):
             root=Path(tmp); (root/'.auto-reviewer').mkdir()
             sig=f'Reviewed with: `auto-reviewer-shared.yaml` `{workflow_ref}` workflow · `cr-request` `v{version}` skill'
             (root/'.auto-reviewer/review.md').write_text('<!-- m -->\nbody\n\n'+sig+'\nNext step: `/cr-received PR #1`\n')
-            env={**os.environ,'START':'0','SIGNATURE':sig,'SEP':' · ','USAGE_MODEL':model,'USAGE_EFFORT':effort}
+            env={**os.environ,'START':'0','SIGNATURE':sig,'SEP':' · ','USAGE_MODEL':model,'USAGE_EFFORT':effort,'BODY_FILE_PATH':'.auto-reviewer/review.md','NUMBER':'1'}
             if execution is not None:
                 (root/'exec.json').write_text(raw if raw is not None else json.dumps(execution)); env['EXEC_FILE']=str(root/'exec.json')
             run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))',f'elapsed={elapsed}')
@@ -1272,6 +1272,184 @@ class UsageRecordTest(unittest.TestCase):
         self.assertEqual(self.run_duration([],raw='not json'),duration)
         self.assertEqual(self.run_duration([{'type':'system'}]),duration)
         self.assertEqual(self.run_duration([{'type':'result','usage':{}}]),duration)
+
+class DeterministicTrailerTest(unittest.TestCase):
+    SIG='Reviewed with: `auto-reviewer-shared.yaml` `v0.0.6` workflow · `cr-request` `v0.0.11` skill'
+    NEXT='Next step: `/verify -> /finalize squash`'
+    TABLE='| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | %s | %s | %s |'
+
+    def finish(self, trailer, counts=(0,0,0)):
+        body='<!-- m -->\n'+self.TABLE%counts+'\n\n**Readiness:** Ready\n\n<details><summary>Details</summary>\n\nEvidence.\n\n</details>\n'+trailer
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); (root/'.auto-reviewer').mkdir()
+            (root/'.auto-reviewer/review.md').write_text(body)
+            env={**os.environ,'START':'0','SIGNATURE':self.SIG,'SEP':' · ','USAGE_MODEL':'m','USAGE_EFFORT':'medium','BODY_FILE_PATH':'.auto-reviewer/review.md','NUMBER':'7'}
+            env.pop('EXEC_FILE',None)
+            run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))','elapsed=125')
+            result=subprocess.run(['bash','-eo','pipefail','-c',run],cwd=root,env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            return (root/'.auto-reviewer/review.md').read_text()
+
+    def test_missing_malformed_and_correct_trailers_publish_the_same_body(self):
+        good=self.SIG+' · In `9 min 9 sec`\n'+self.NEXT+'\n'
+        cases={'missing':'',
+               'correct':good,
+               'malformed signature':'Reviewed with: something else\n'+self.NEXT+'\n',
+               'malformed next step':self.SIG+'\nNext step: verify it - then merge\n',
+               'reversed order':self.NEXT+'\n'+self.SIG+' · In `1 min 1 sec`\n',
+               'blank lines and CRLF':'\r\n'+self.SIG+'\r\n\r\n'+self.NEXT+'\r\n\r\n'}
+        results={name:self.finish(trailer) for name,trailer in cases.items()}
+        expected=results['correct']
+        self.assertTrue(expected.endswith('\n\n'+self.SIG+' · In `2 min 5 sec`\n'+self.NEXT+'\n'),expected)
+        for name,body in results.items():
+            with self.subTest(case=name):
+                self.assertEqual(body,expected)
+
+    def test_validator_accepts_the_normalized_body(self):
+        script=step('Validate review body')
+        fragment='fail() { exit 1; }\n'+script[script.index('tail2=$(tr -d'):script.index('# The Next step line loses')]
+        for trailer in ('','Reviewed with: broken\n'):
+            with self.subTest(trailer=trailer),tempfile.TemporaryDirectory() as tmp:
+                path=Path(tmp)/'body'; path.write_text(self.finish(trailer))
+                env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11','WORKFLOW_IDENTITY':'auto-reviewer-shared.yaml@v0.0.6'}
+                result=subprocess.run(['bash','-c',fragment],env=env,capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_fallback_next_step_follows_the_finding_counts(self):
+        self.assertTrue(self.finish('',(0,0,0)).endswith(self.NEXT+'\n'))
+        for counts in ((1,0,0),(0,2,0),(0,0,3)):
+            with self.subTest(counts=counts):
+                self.assertTrue(self.finish('',counts).endswith('Next step: `/cr-received PR #7`\n'))
+
+    def test_fallback_next_step_needs_a_plain_ready(self):
+        trailer='<details><summary>Details</summary>\n\nEvidence.\n\n</details>\n'
+        for readiness in ('Not ready','Ready with fixes'):
+            with self.subTest(readiness=readiness):
+                body='<!-- m -->\n'+self.TABLE%(0,0,0)+'\n\n**Readiness:** '+readiness+'\n\n'+trailer
+                with tempfile.TemporaryDirectory() as tmp:
+                    root=Path(tmp); (root/'.auto-reviewer').mkdir()
+                    (root/'.auto-reviewer/review.md').write_text(body)
+                    env={**os.environ,'START':'0','SIGNATURE':self.SIG,'SEP':' · ','USAGE_MODEL':'m','USAGE_EFFORT':'medium','BODY_FILE_PATH':'.auto-reviewer/review.md','NUMBER':'7'}
+                    env.pop('EXEC_FILE',None)
+                    run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))','elapsed=1')
+                    result=subprocess.run(['bash','-eo','pipefail','-c',run],cwd=root,env=env,capture_output=True,text=True)
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    self.assertTrue((root/'.auto-reviewer/review.md').read_text().endswith('Next step: `/cr-received PR #7`\n'))
+
+    def test_valid_agent_next_step_is_kept(self):
+        body=self.finish(self.SIG+'\nNext step: `/cr-received PR #7` · two findings\n',(0,1,0))
+        self.assertTrue(body.endswith('Next step: `/cr-received PR #7` · two findings\n'))
+
+
+def step_env(name):
+    ruby = os.environ.get('RUBY', 'ruby')
+    script = "require 'yaml'; require 'json'; w=YAML.load_file(ARGV[0], aliases: true); s=w['jobs'].values.flat_map{|j| j['steps'] || []}.find{|x| x['name']==ARGV[1]}; abort 'missing step' unless s; puts JSON.generate(s.fetch('env', {}))"
+    return json.loads(subprocess.check_output([ruby, '-e', script, str(WORKFLOW), name], text=True))
+
+
+class RetryTest(unittest.TestCase):
+    LOW = r'$\color{green}◎$ Low'
+    TABLE = '| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | FINDINGS | 0 | 0 | 1 |'
+
+    def body(self, details_close='</details>', details_open='<details><summary>Details</summary>', readiness='**Readiness:** Not ready'):
+        return ('<!-- m -->\n\n' + self.TABLE + '\n\n' + readiness + '\n\n' + details_open + '\n\n- ' + self.LOW
+                + ' R2-F1 [`src/a.py:1`](url) issue\n\n' + details_close + '\n')
+
+    def precheck(self, body, comment_id='R2-F1'):
+        draft = {'schema_version':1, 'repository':'owner/repo', 'pr_number':42, 'head_sha':'a'*40,
+                 'review_source_id':None, 'previous_findings':[],
+                 'findings':[{'origin_review_id':None, 'original_id':'R2-F1', 'path':'src/a.py', 'severity':'Minor'}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); (root/'.auto-reviewer').mkdir()
+            (root/'.auto-reviewer/review.md').write_text(body)
+            (root/'.auto-reviewer/review-actions.json').write_text(json.dumps(draft))
+            (root/'.auto-reviewer/comments.json').write_text(json.dumps([{'path':'src/a.py','line':1,'body':self.LOW+' '+comment_id+' - issue'}]))
+            output = root/'output'
+            env = {**os.environ, **step_env('Pre-validate review draft'), 'NUMBER':'42', 'HEAD_SHA':'a'*40, 'REPO':'owner/repo',
+                   'GITHUB_OUTPUT':str(output)}
+            result = subprocess.run(['bash','-eo','pipefail','-c',step('Pre-validate review draft')], cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            error = (root/'.auto-reviewer/retry-error.txt').read_text() if (root/'.auto-reviewer/retry-error.txt').exists() else ''
+            return (output.read_text() if output.exists() else ''), error
+
+    def test_precheck_uses_the_publish_actions_validator_verbatim(self):
+        self.assertEqual(step_env('Pre-validate review draft')['VALIDATE_ACTIONS'], step('Validate review actions'))
+
+    def test_valid_draft_needs_no_retry(self):
+        self.assertEqual(self.precheck(self.body()), ('', ''))
+
+    def test_inline_finding_mismatch_requests_a_retry_with_the_error(self):
+        output, error = self.precheck(self.body(), comment_id='R2-F9')
+        self.assertEqual(output, 'error=true\n')
+        self.assertIn('inline finding mismatch', error)
+
+    def test_structure_errors_request_a_retry(self):
+        cases = {'no closing line': self.body(details_close=''),
+                 'two details': self.body().replace('</details>', '<details><summary>Other</summary>\n</details>\n</details>'),
+                 'no readiness': self.body(readiness='')}
+        for name, body in cases.items():
+            with self.subTest(case=name):
+                output, error = self.precheck(body)
+                self.assertEqual(output, 'error=true\n')
+                self.assertIn('review body structure', error)
+
+    def test_precheck_agrees_with_the_publish_renderer_on_details_counts(self):
+        for details_close in ('</details>', ''):
+            with self.subTest(close=details_close):
+                body = self.body(details_close=details_close)
+                precheck_failed = self.precheck(body)[0] != ''
+                self.assertEqual(precheck_failed, details_close == '')
+
+    def test_unclosed_details_is_closed_by_the_workflow(self):
+        broken = self.body(details_close='')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); (root/'.auto-reviewer').mkdir()
+            (root/'.auto-reviewer/review.md').write_text(broken)
+            sig = DeterministicTrailerTest.SIG
+            env = {**os.environ, 'START':'0', 'SIGNATURE':sig, 'SEP':' · ', 'USAGE_MODEL':'m', 'USAGE_EFFORT':'medium',
+                   'BODY_FILE_PATH':'.auto-reviewer/review.md', 'NUMBER':'42'}
+            env.pop('EXEC_FILE', None)
+            run = step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))', 'elapsed=3')
+            result = subprocess.run(['bash','-eo','pipefail','-c',run], cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            fixed = (root/'.auto-reviewer/review.md').read_text()
+        self.assertIn('issue\n\n</details>\n\n' + sig, fixed)
+        self.assertEqual(self.precheck(fixed), ('', ''))
+
+    def test_retry_usage_adds_to_the_first_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); (root/'.auto-reviewer').mkdir()
+            (root/'.auto-reviewer/review.md').write_text(self.body())
+            for name, tokens, cost in (('one.json', 100, 0.25), ('two.json', 50, 0.125)):
+                (root/name).write_text(json.dumps([{'type':'result','total_cost_usd':cost,'usage':{'input_tokens':tokens}}]))
+            (root/'retry-exec-file').write_text(str(root/'two.json'))
+            env = {**os.environ, 'START':'0', 'SIGNATURE':DeterministicTrailerTest.SIG, 'SEP':' · ', 'USAGE_MODEL':'m', 'USAGE_EFFORT':'medium',
+                   'BODY_FILE_PATH':'.auto-reviewer/review.md', 'NUMBER':'42', 'EXEC_FILE':str(root/'one.json'), 'RUNNER_TEMP':str(root)}
+            run = step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))', 'elapsed=3')
+            result = subprocess.run(['bash','-eo','pipefail','-c',run], cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('`m` `medium` · `150 tokens` · `$0.3750`', (root/'.auto-reviewer/review.md').read_text())
+
+    def test_retry_step_runs_once_on_the_precheck_error_with_the_same_prompt(self):
+        ruby = os.environ.get('RUBY', 'ruby')
+        script = "require 'yaml'; require 'json'; w=YAML.load_file(ARGV[0], aliases: true); puts JSON.generate(w['jobs']['review']['steps'])"
+        steps = json.loads(subprocess.check_output([ruby, '-e', script, str(WORKFLOW)], text=True))
+        first = next(s for s in steps if s.get('id') == 'claude')
+        retry = next(s for s in steps if s.get('id') == 'claude_retry')
+        self.assertEqual(retry['if'], "steps.precheck.outputs.error == 'true'")
+        self.assertTrue(retry['continue-on-error'])
+        self.assertEqual(retry['uses'], first['uses'])
+        self.assertEqual(retry['with']['prompt'], first['with']['prompt'])
+        self.assertEqual(retry['with']['claude_args'], first['with']['claude_args'])
+        self.assertIn('.auto-reviewer/retry-error.txt', first['with']['prompt'])
+        names = [s.get('id') or s.get('name') for s in steps]
+        self.assertEqual(names.count('claude_retry'), 1)
+        self.assertLess(names.index('claude'), names.index('precheck'))
+        self.assertLess(names.index('precheck'), names.index('claude_retry'))
+        after = names[names.index('claude_retry'):]
+        self.assertIn('Add review duration', after)
+        self.assertIn('Check inline comments', after)
+
 
 class TokenFilterTest(unittest.TestCase):
     def test_atlassian_prefix_is_blocked_in_every_transport(self):

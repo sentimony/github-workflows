@@ -27,7 +27,10 @@ install as a plain directory without symbolic links, and must name its version.
 Published comments show readiness first, then the verdict table, a collapsed Details
 block, and a Used footer. The footer links skill and workflow versions in superscript,
 groups model and effort, and shows measured duration, tokens and cost. The public
-comment omits Next step; the reviewer's internal draft retains its validated contract.
+comment omits Next step; the reviewer's internal draft retains its validated contract. The
+workflow itself appends the draft's signature and, when the model's is missing or invalid,
+the Next step line, closes an unclosed Details block, and, when the draft still fails its
+structural validation, asks the model once to fix the listed errors before publish.
 History and cycle summaries continue to read earlier review formats.
 
 ### Contract

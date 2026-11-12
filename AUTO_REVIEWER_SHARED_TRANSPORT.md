@@ -7,7 +7,8 @@ to the read-only reviewer.
 
 The reusable engine is `.github/workflows/auto-reviewer-shared.yaml`, named
 `Auto Reviewer (Shared)`. The reviewer writes the internal draft footer with separate
-workflow/ref spans and a Next step line; trusted publish validates it and renders the
+workflow/ref spans and a Next step line; the review job rewrites those closing lines
+deterministically (dropping any model-written ones), trusted publish validates them and renders the
 public comment. The public body shows `Readiness: **Ready**` (or the other validated
 readiness), the verdict table, one collapsed Details block, and a `Used:` footer.
 That footer links superscript skill/workflow versions, groups model and effort in one

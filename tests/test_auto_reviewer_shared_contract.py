@@ -29,6 +29,7 @@ jobs:
 
 class ContractTest(unittest.TestCase):
     def check(self, workflow=None, caller=CALLER, expected='validate'):
+        expected = [expected] if isinstance(expected, str) else expected
         with tempfile.TemporaryDirectory() as directory:
             central = Path(directory) / 'central.yaml'
             adapter = Path(directory) / 'caller.yaml'
@@ -37,7 +38,7 @@ class ContractTest(unittest.TestCase):
             env = os.environ.copy()
             env.pop('GEM_HOME', None)
             env.pop('GEM_PATH', None)
-            return subprocess.run(['python3', str(CHECKER), '--workflow', str(central), '--caller', str(adapter), '--required-ci-job', expected], capture_output=True, text=True, env=env)
+            return subprocess.run(['python3', str(CHECKER), '--workflow', str(central), '--caller', str(adapter), *[x for name in expected for x in ('--required-ci-job', name)]], capture_output=True, text=True, env=env)
 
     def test_source_rejects_legacy_pr_number_input(self):
         caller = CALLER.replace('      required-ci-job:', "      pr_number: '42'\n      required-ci-job:")
@@ -48,6 +49,26 @@ class ContractTest(unittest.TestCase):
     def test_valid_caller_is_accepted(self):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_new_caller_forms(self):
+        token = CALLER.replace('AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}',
+                               'AUTO_REVIEWER_TOKEN: ${{ secrets.SO_UPSTARS_PR_TOKEN }}')
+        self.assertEqual(self.check(caller=token).returncode, 0)
+        both = CALLER.replace('    secrets:', '    secrets:\n      AUTO_REVIEWER_TOKEN: ${{ secrets.X }}')
+        self.assertEqual(self.check(caller=both).returncode, 0)
+        jobs = CALLER.replace('required-ci-job: validate', 'required-ci-jobs: |\n        Lint\n        Unit tests\n      reviewer: so-upstars\n      review-changed-head: true')
+        self.assertEqual(self.check(caller=jobs, expected=['Lint', 'Unit tests']).returncode, 0)
+        comma = CALLER.replace('required-ci-job: validate', 'required-ci-jobs: Lint, Unit tests')
+        self.assertEqual(self.check(caller=comma, expected=['Unit tests']).returncode, 0)
+        missing = self.check(caller=comma, expected=['Docs'])
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn('incorrect required CI job', missing.stderr)
+        bad = self.check(caller=CALLER.replace('validate', 'bad;job'), expected='bad;job')
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn('invalid CI job', bad.stderr)
+        no_secret = self.check(caller=CALLER.replace('      AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', ''))
+        self.assertNotEqual(no_secret.returncode, 0)
+        self.assertIn('missing required secret', no_secret.stderr)
 
     def test_source_rejects_legacy_secret_input(self):
         legacy = CALLER.replace('      AUTO_REVIEWER_YNGWALD:', '      YNGWALD_PR_TOKEN:')
@@ -88,6 +109,7 @@ class ContractTest(unittest.TestCase):
             'renamed input': (original.replace('      required-ci-job:', '      renamed-ci-job:', 1), CALLER),
             'renamed secret': (original.replace('      AUTO_REVIEWER_YNGWALD:', '      RENAMED_TOKEN:', 1), CALLER),
             'missing input': (original, CALLER.replace('      required-ci-job: validate\n', "      pr: ''\n")),
+            'wrong job': (original, CALLER.replace('required-ci-job: validate', 'required-ci-job: other')),
             'wrong type': (original, CALLER.replace('required-ci-job: validate', 'required-ci-job: 123')),
             'unknown input': (original, CALLER.replace('      required-ci-job:', '      typo: value\n      required-ci-job:')),
             'missing secret': (original, CALLER.replace('      AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', '')),
@@ -98,7 +120,8 @@ class ContractTest(unittest.TestCase):
         }
         expected_errors = {
             'renamed input': 'unknown caller input', 'renamed secret': 'unknown caller secret',
-            'missing input': 'missing required input', 'wrong type': 'invalid caller input type',
+            'missing input': 'missing required CI job', 'wrong job': 'incorrect required CI job',
+            'wrong type': 'invalid caller input type',
             'unknown input': 'unknown caller input', 'missing secret': 'missing required secret',
             'unknown secret': 'unknown caller secret', 'inherit': 'caller secrets must be explicit',
             'missing status permission': 'insufficient caller permissions',
@@ -113,9 +136,11 @@ class ContractTest(unittest.TestCase):
     def test_callee_schema_changes_are_enforced(self):
         original = WORKFLOW.read_text()
         cases = (
-            (original.replace('type: string', 'type: number', 1), CALLER, 'invalid caller input type'),
+            (original.replace("type: string\n        default: ''", 'type: number\n        default: 1', 1), CALLER, 'invalid caller input type'),
             (original.replace("default: ''", 'default: 123', 1), CALLER, 'invalid input default'),
-            (original.replace('        required: false', '        required: true', 1), CALLER, 'missing required input'),
+            (original.replace('      pr:\n        description: PR number\n        required: false',
+                              '      pr:\n        description: PR number\n        required: true', 1),
+             CALLER, 'missing required input'),
         )
         for workflow, caller, error in cases:
             with self.subTest(error=error):
@@ -153,10 +178,13 @@ class ContractTest(unittest.TestCase):
         import re
         readme = (ROOT / 'README.md').read_text()
         examples = re.findall(r'```yaml\n(.*?)\n```', readme, re.S)
-        self.assertEqual(len(examples), 2)
-        for example, expected in zip(examples, ('validate', 'check')):
+        self.assertEqual(len(examples), 3)
+        for example, expected in zip(examples, (['validate'], ['check'], ['Lint', 'Unit tests'])):
             with self.subTest(expected=expected):
-                self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.4\n', example + '\n')
-                self.assertIn('AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}\n', example + '\n')
+                tag, secret = (('v0.0.6', 'AUTO_REVIEWER_TOKEN: ${{ secrets.SO_UPSTARS_PR_TOKEN }}')
+                               if 'Unit tests' in expected else
+                               ('v0.0.4', 'AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}'))
+                self.assertIn(f'uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@{tag}\n', example + '\n')
+                self.assertIn(secret + '\n', example + '\n')
                 result = self.check(caller=example, expected=expected)
                 self.assertEqual(result.returncode, 0, result.stderr)

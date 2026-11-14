@@ -3,6 +3,15 @@
 One release tag covers every workflow in this repository. Each release lists its changes
 per workflow, newest first.
 
+## v0.0.8
+
+### auto-reviewer-shared
+
+1. The README's "Configure Actions secrets" steps open with how to create the
+   `AUTO_REVIEWER_YNGWALD` value for a new `sentimony` repository: a fine-grained PAT of
+   `yngwald` owned by `sentimony`, limited to that repository with Pull requests and Issues
+   set to Read and write, approved by the org owner, and checked with `gh api user`.
+
 ## v0.0.7 - 2026-11-12
 
 ### auto-reviewer-shared

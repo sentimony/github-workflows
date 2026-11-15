@@ -214,9 +214,9 @@ jobs:
           # Footer patterns of published reviews: the Reviewed with signature and the Used line.
           reviewed_with=r'^Reviewed with: (?:(?:`auto-reviewer(?:-shared)?\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer(?:-shared)?\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` [^\n]+) skill · In `?'
           reviewed_duration_re=re.compile(reviewed_with+r'([0-9]+) min ([0-9]+) sec`?(?: · .*)?$',re.M)
-          used_duration_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[(?:[A-Za-z0-9][A-Za-z0-9._/-]*|# v[0-9]+\.[0-9]+\.[0-9]+)\]\(https://github\.com/sentimony/github-workflows(?:/commit/[0-9a-f]{40})?\)</sup> · (?:`[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])? (?:low|medium|high)` · )?(?:ci `[0-9]+ min [0-9]+ sec` · model )?`([0-9]+) min ([0-9]+) sec`(?: · .*)?$',re.M)
+          used_duration_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[(?:[A-Za-z0-9][A-Za-z0-9._/-]*|# v[0-9]+\.[0-9]+\.[0-9]+)\]\(https://github\.com/sentimony/github-workflows(?:/commit/[0-9a-f]{40})?\)</sup> · (?:`[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])? (?:low|medium|high)` · )?(?:ci `(?:[0-9]+ min [0-9]+|0) sec` · model )?`([0-9]+) min ([0-9]+) sec`(?: · .*)?$',re.M)
           # The whole path, from the start of the triggering CI run to publication.
-          used_path_re=re.compile(r'^Used: .* · ci `([0-9]+) min ([0-9]+) sec` · model `[0-9]+ min [0-9]+ sec`(?: · .*)?$',re.M)
+          used_path_re=re.compile(r'^Used: .* · ci `(?:([0-9]+) min ([0-9]+)|(0)) sec` · model `[0-9]+ min [0-9]+ sec`(?: · .*)?$',re.M)
           disposition_re=re.compile(r'<!--\s*cr-received-disposition:v1\s+(\{.*?\})\s*-->',re.S)
           repo=number=reviewer=prefix=None
 
@@ -324,7 +324,7 @@ jobs:
               all_threads=threads()
               valid=[]; unknown=False; review_durations=[]; path_durations=[]; usages=[]
               usage_re=re.compile(reviewed_with+r'[0-9]+ min [0-9]+ sec`?(?: · `?([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?)`? `?(low|medium|high)`? · `?([0-9]+(?:,[0-9]{3})*) tokens`? · `?\$([0-9]+\.[0-9]{4})`?)?$',re.M)
-              used_usage_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[(?:[A-Za-z0-9][A-Za-z0-9._/-]*|# v[0-9]+\.[0-9]+\.[0-9]+)\]\(https://github\.com/sentimony/github-workflows(?:/commit/[0-9a-f]{40})?\)</sup> · `([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)` · (?:ci `[0-9]+ min [0-9]+ sec` · model )?`[0-9]+ min [0-9]+ sec` · `([0-9]+(?:,[0-9]{3})*) tokens` · `\$([0-9]+\.[0-9]{4})`$',re.M)
+              used_usage_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[(?:[A-Za-z0-9][A-Za-z0-9._/-]*|# v[0-9]+\.[0-9]+\.[0-9]+)\]\(https://github\.com/sentimony/github-workflows(?:/commit/[0-9a-f]{40})?\)</sup> · `([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)` · (?:ci `(?:[0-9]+ min [0-9]+|0) sec` · model )?`[0-9]+ min [0-9]+ sec` · `([0-9]+(?:,[0-9]{3})*) tokens` · `\$([0-9]+\.[0-9]{4})`$',re.M)
               for r in reviews:
                   review_durations.append(None)
                   found_usage=usage_re.findall(r.get('body') or '') + used_usage_re.findall(r.get('body') or '')
@@ -344,7 +344,7 @@ jobs:
                       if len(signature)==1 and int(signature[0][1])<60: review_durations[-1]=int(signature[0][0])*60+int(signature[0][1])
                   # CI time is the whole path (`ci` in the Used footer); earlier reviews have none.
                   path=used_path_re.findall(r.get('body') or '')
-                  path_durations.append(int(path[0][0])*60+int(path[0][1]) if len(path)==1 and int(path[0][1])<60 else None)
+                  path_durations.append((0 if path[0][2] else int(path[0][0])*60+int(path[0][1])) if len(path)==1 and int(path[0][1] or 0)<60 else None)
               durations=[d for d in review_durations if d is not None]
               origins={}
               for r,d in valid:
@@ -517,27 +517,7 @@ jobs:
       base_sha: ${{ steps.gate.outputs.base_sha }}
       head_sha: ${{ steps.gate.outputs.head_sha }}
       ci_jobs: ${{ steps.gate.outputs.ci_jobs }}
-      path_started_at: ${{ steps.path_start.outputs.at }}
     steps:
-      # The Used footer's `ci` duration starts here: at the CI run that triggered this review,
-      # else at this run (a review request, a dispatch). Publish has no `actions: read`.
-      - name: Record path start
-        id: path_start
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          CI_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
-        shell: bash
-        run: |
-          started="$CI_STARTED_AT"
-          if [ -z "$started" ]; then
-            started=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq '.run_started_at' 2>/dev/null) || started=
-          fi
-          [[ "$started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          echo "at=$started" >> "$GITHUB_OUTPUT"
-
       - name: Review gate decision
         id: gate
         env:
@@ -1669,8 +1649,8 @@ jobs:
           WORKFLOW_IDENTITY: ${{ needs.review.outputs.workflow_identity }}
           WORKFLOW_VERSION: ${{ needs.review.outputs.workflow_version }}
           WORKFLOW_SHA: ${{ needs.review.outputs.workflow_sha }}
-          # Recorded by the gate job: the start of the CI run that triggered this review, else of this run.
-          CI_STARTED_AT: ${{ needs.gate.outputs.path_started_at }}
+          # The start of the CI run that triggered this review; empty for a review request or a dispatch.
+          CI_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
         run: |
           post_status() {
             gh api "repos/$REPO/statuses/$HEAD_SHA" -f state="$1" -f description="$2" \
@@ -1814,12 +1794,15 @@ jobs:
                   f' · `auto-reviewer-shared` <sup>{workflow_link}</sup>')
           if model is not None:
               used += f' · `{model} {effort}`'
-          # `ci` is the whole path: from the start of the CI run that triggered the review (of this
-          # run for a review request or a dispatch) to this publication. `model` is the agent step.
+          # `ci` is the whole path: from the start of the CI run that triggered the review to this
+          # publication. A review that no CI run triggered (a review request, a dispatch) shows
+          # `0 sec`. `model` is the agent step. An unusable start keeps the agent step alone.
           def path_duration():
               import time
               from datetime import datetime
               started = os.environ.get('CI_STARTED_AT', '')
+              if not started:
+                  return '0 sec'
               if not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', started):
                   return None
               try:

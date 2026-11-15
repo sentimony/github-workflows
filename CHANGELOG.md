@@ -8,11 +8,10 @@ of each version in `main`, or pin the full SHA of such a commit.
 
 ### auto-reviewer-shared
 
-1. The `ci` duration of the Used footer was missing for a review started by a review
-   request or a dispatch: the publish job read the run's start through the API without
-   `actions: read`. The gate job, which has that permission, now records the start (the
-   triggering CI run's, else this run's, else its own time) and publish takes it from the
-   gate's output.
+1. A review that no CI run triggered (a review request, a dispatch) shows `ci` as
+   `0 sec`. Before, the publish job asked the API for the run's start without
+   `actions: read`, the read failed, and the footer showed the agent step alone, without
+   the `ci` and `model` labels. The publish job no longer calls the API for it.
 
 ## v0.0.15 - 2026-11-15
 

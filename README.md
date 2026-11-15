@@ -31,9 +31,9 @@ rule: `##` titles the comment (`## Readiness: Ready with fixes`, `## Review cycl
 
 The footer links skill and workflow versions in superscript, groups model and effort, and
 shows two durations, tokens and cost: `ci` is the whole path, from the start of the CI run
-that triggered the review (of the reviewer run itself for a review request or a dispatch)
-to the publication; `model` is the agent step alone. When the start cannot be read, the
-footer shows the agent step without a label, as before. The merged summary lists each
+that triggered the review to the publication, and `0 sec` for a review that no CI
+run triggered (a review request, a dispatch); `model` is the agent step alone. When the
+start is unusable, the footer shows the agent step without a label, as before. The merged summary lists each
 review with its model and effort in one code span and both durations (`CI time`,
 `Model time`) in code spans, an unmeasured value as plain `unknown`, and a bold Total row;
 reviews published before `v0.0.15` have no `CI time`. The workflow

@@ -1,0 +1,75 @@
+name: Promote stable
+
+# Moves the `stable` branch, which callers reference as `@stable`, to a released commit of
+# `main`: after a green CI run on `main` whose newest CHANGELOG.md version differs from the
+# one at `stable`, or on dispatch. The move is fast-forward only; moving `stable` back is a
+# manual push by a repository admin.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full SHA of a commit in main to promote (empty - the tip of main)
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote-stable
+
+jobs:
+  promote:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'
+      && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # GITHUB_TOKEN cannot push commits that change workflow files, so the push uses a deploy key.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+          ssh-key: ${{ secrets.STABLE_DEPLOY_KEY }}
+      - name: Promote stable
+        shell: bash
+        env:
+          CANDIDATE: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+        run: |
+          note() { echo "$1"; echo "$1" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
+          fail() { echo "::error::$1"; exit 1; }
+          version_at() {
+            git show "$1:CHANGELOG.md" \
+              | sed -n -E '/^## (v[0-9]+\.[0-9]+\.[0-9]+)( - .*)?$/{s//\1/p;q;}'
+          }
+          candidate="${CANDIDATE:-$(git rev-parse origin/main)}"
+          [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || fail "Not a full commit SHA: $candidate"
+          git cat-file -e "${candidate}^{commit}" 2>/dev/null || fail "Unknown commit $candidate"
+          git merge-base --is-ancestor "$candidate" origin/main || fail "$candidate is not in main"
+          new=$(version_at "$candidate")
+          [ -n "$new" ] || fail "No version heading in CHANGELOG.md at $candidate"
+          remote=$(git ls-remote origin refs/heads/stable)
+          stable="${remote%%[[:space:]]*}"
+          if [ -n "$stable" ]; then
+            if [ "$stable" = "$candidate" ]; then
+              note "stable is already at $candidate ($new)"; exit 0
+            fi
+            git cat-file -e "${stable}^{commit}" 2>/dev/null || fail "stable ($stable) is not in the history of main"
+            if git merge-base --is-ancestor "$candidate" "$stable"; then
+              note "stable ($stable) is already ahead of $candidate"; exit 0
+            fi
+            git merge-base --is-ancestor "$stable" "$candidate" \
+              || fail "stable ($stable) is not an ancestor of $candidate; an admin moves it by hand"
+            old=$(version_at "$stable")
+            if [ "$old" = "$new" ]; then
+              note "No new version at $candidate: stable stays at $stable ($old)"; exit 0
+            fi
+          fi
+          git push origin "${candidate}:refs/heads/stable"
+          note "stable: ${old:-none} -> $new ($candidate)"

@@ -640,9 +640,15 @@ class ResolverRunTest(unittest.TestCase):
         return subprocess.run(['bash','-eo','pipefail','-c',step(name)],env={**self.env,**extra},capture_output=True,text=True)
 
     def test_completion_updates_public_readiness_without_reintroducing_next_step(self):
+        self.completion_keeps_public_form('Readiness: **Ready with fixes**','Readiness: **Ready**')
+
+    def test_completion_updates_the_readiness_heading(self):
+        self.completion_keeps_public_form('## Readiness: Ready with fixes','## Readiness: Ready')
+
+    def completion_keeps_public_form(self, before, after):
         self.reset(addressed=True)
         table='| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | 0 | 0 | 0 |'
-        (self.root/'post.md').write_text('Readiness: **Ready with fixes**\n\n'+table+'\n\n<details><summary>Details</summary>\n\nEvidence\n\n</details>\n\n'+USED_EXAMPLE+'\n')
+        (self.root/'post.md').write_text(before+'\n\n'+table+'\n\n<details><summary>Details</summary>\n\nEvidence\n\n</details>\n\n'+USED_EXAMPLE+'\n')
         result=self.run_step('Publish review actions',GH_TOKEN='fixture-publisher',PHASE='PREPARE',STAGE='prepare')
         self.assertEqual(result.returncode,0,result.stderr)
         self.request=json.loads(next(x.split('=',1)[1] for x in (self.root/'output').read_text().splitlines() if x.startswith('requests=')))
@@ -650,7 +656,7 @@ class ResolverRunTest(unittest.TestCase):
         completed=self.complete()
         self.assertEqual(completed.returncode,0,completed.stderr)
         body=self.state()['body']
-        self.assertTrue(body.startswith('Readiness: **Ready**\n'))
+        self.assertTrue(body.startswith(after+'\n'))
         self.assertNotIn('Next step:',body)
         self.assertIn(USED_EXAMPLE,body)
 
@@ -979,7 +985,7 @@ USED_EXAMPLE = 'Used: `cr-request` <sup>[0.0.16](https://www.skills.sh/sentimony
 
 
 class PublicPresentationTest(unittest.TestCase):
-    def render(self, readiness='Ready', ref='v0.0.4', usage=True, reversed_footer=False, details='<details open><summary>Details</summary>', full=False, evidence='Full evidence.', extra_before='', extra_after='', row='| PASS | PASS | PASS | 0 | 0 | 0 |', workflow_version=None):
+    def render(self, readiness='Ready', ref='v0.0.4', usage=True, reversed_footer=False, details='<details open><summary>Details</summary>', full=False, evidence='Full evidence.', extra_before='', extra_after='', row='| PASS | PASS | PASS | 0 | 0 | 0 |', workflow_version=None, workflow_sha=None, ci_started_at=None):
         signature=f'Reviewed with: `auto-reviewer-shared.yaml` `{ref}` workflow · `cr-request` `v0.0.16` skill · In `0 min 49 sec`'
         if usage:
             signature+=' · `claude-sonnet-5-5` `medium` · `202,629 tokens` · `$0.1634`'
@@ -995,7 +1001,12 @@ class PublicPresentationTest(unittest.TestCase):
             env={**os.environ,'BODY_FILE':str(root/'draft'),'POST_FILE':str(root/'post'),'SIGNATURE':signature,'INTERNAL_SIGNATURE':signature,
                  'LAST_LINE':footer[-1]}
             env.pop('WORKFLOW_VERSION',None)
+            env.pop('WORKFLOW_SHA',None)
+            env.pop('CI_STARTED_AT',None)
+            env.pop('RUN_ID',None)
+            if ci_started_at is not None: env['CI_STARTED_AT']=ci_started_at
             if workflow_version is not None: env['WORKFLOW_VERSION']=workflow_version
+            if workflow_sha is not None: env['WORKFLOW_SHA']=workflow_sha
             if full:
                 fake=root/'gh'
                 fake.write_text('#!/bin/sh\ncase "$2" in\n  */status[?]*) echo run-url ;;\n  */pulls/42) echo '+('a'*40)+' ;;\n'
@@ -1016,7 +1027,7 @@ class PublicPresentationTest(unittest.TestCase):
     def test_exact_requested_published_layout(self):
         result,body,marker,table=self.render()
         self.assertEqual(result.returncode,0,result.stderr)
-        expected=marker+'\n\nReadiness: **Ready**\n\n'+table+'\n\n<details><summary>Details</summary>\n\nFull evidence.\n\n</details>\n\n'+USED_EXAMPLE+'\n'
+        expected=marker+'\n\n## Readiness: Ready\n\n'+table+'\n\n<details><summary>Details</summary>\n\nFull evidence.\n\n</details>\n\n'+USED_EXAMPLE+'\n'
         self.assertEqual(body,expected)
         self.assertNotIn('Next step:',body)
         self.assertNotIn('Reviewed with:',body)
@@ -1027,7 +1038,7 @@ class PublicPresentationTest(unittest.TestCase):
         self.assertIn('ready_to_post=true\n',result.outputs)
         self.assertIn('signature='+USED_EXAMPLE+'\n',result.outputs)
         self.assertIn('summary=Critical 0, Important 0, Minor 0; Ready\n',result.outputs)
-        self.assertTrue(body.startswith(marker+'\n\nReadiness: **Ready**\n'))
+        self.assertTrue(body.startswith(marker+'\n\n## Readiness: Ready\n'))
 
     def test_nested_details_are_rejected_before_publication(self):
         result,body,_,_=self.render(details='<details><summary>Details</summary>\n<details><summary>Other</summary>')
@@ -1070,7 +1081,7 @@ class PublicPresentationTest(unittest.TestCase):
             with self.subTest(readiness=readiness):
                 result,body,_,_=self.render(readiness=readiness,reversed_footer=True)
                 self.assertEqual(result.returncode,0,result.stderr)
-                self.assertIn('Readiness: **'+readiness+'**',body)
+                self.assertIn('\n## Readiness: '+readiness+'\n',body)
                 self.assertNotIn('Next step:',body)
                 self.assertTrue(body.rstrip().endswith(USED_EXAMPLE))
 
@@ -1101,6 +1112,42 @@ class PublicPresentationTest(unittest.TestCase):
                 shown=ref[1:] if ref=='v0.0.4' else ref
                 self.assertIn('<sup>['+shown+'](https://github.com/sentimony/github-workflows)</sup>',body)
                 self.assertNotIn('# v',body)
+
+    def test_used_footer_shows_the_whole_path_beside_the_agent_step(self):
+        import re, time
+        stamp=lambda ago: time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(time.time()-ago))
+        result,body,_,_=self.render(ci_started_at=stamp(125))
+        self.assertEqual(result.returncode,0,result.stderr)
+        used=body.rstrip().splitlines()[-1]
+        match=re.fullmatch(re.escape(USED_EXAMPLE).replace(re.escape(' · `0 min 49 sec` · '),
+                           r' · ci `2 min (\d+) sec` · model `0 min 49 sec` · '),used)
+        self.assertIsNotNone(match,used)
+        self.assertIn(int(match[1]),range(5,20))
+        # Without a usable start the footer keeps the agent step alone.
+        for started in ('','yesterday','2026-11-15 21:53:11',stamp(-3600),stamp(8*86400)):
+            with self.subTest(started=started):
+                result,body,_,_=self.render(ci_started_at=started)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertEqual(body.rstrip().splitlines()[-1],USED_EXAMPLE)
+
+    def test_branch_shows_the_version_of_the_commit_it_resolved_to(self):
+        sha='ab928503b0e21a3e98f7ba34ee9eeb22066cfca8'
+        shown='`auto-reviewer-shared` <sup>[# v0.0.15](https://github.com/sentimony/github-workflows/commit/'+sha+')</sup>'
+        result,body,_,_=self.render(ref='stable',workflow_version='v0.0.15',workflow_sha=sha)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn(' · '+shown+' · `claude-sonnet-5-5 medium` · ',body)
+        self.assertNotIn('[stable]',body)
+        # Without a full commit SHA or a vX.Y.Z version the branch name stays.
+        for version,commit in (('v0.0.15',''),('v0.0.15',sha[:12]),('v0.0.15',sha+')](x'),('',sha),('0.0.15',sha)):
+            with self.subTest(version=version,commit=commit):
+                result,body,_,_=self.render(ref='stable',workflow_version=version,workflow_sha=commit)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn('<sup>[stable](https://github.com/sentimony/github-workflows)</sup>',body)
+                self.assertNotIn('# v',body)
+        # A branch named like a commit links the commit it resolved to, not its own name.
+        result,body,_,_=self.render(ref='c'*40,workflow_version='v0.0.15',workflow_sha=sha)
+        self.assertIn('[# v0.0.15](https://github.com/sentimony/github-workflows/commit/'+sha+')',body)
+        self.assertNotIn('c'*40,body)
 
 
 class FooterTest(unittest.TestCase):
@@ -1247,7 +1294,8 @@ class WorkflowIdentityTest(unittest.TestCase):
                 self.assertEqual(output.read_text(),'identity=auto-reviewer-shared.yaml@'+expected+'\nref='+expected+'\n')
 
     def pinned(self, caller, ref='b'*40, caller_ref='owner/repo/.github/workflows/auto-reviewer.yaml@refs/heads/main',
-               caller_sha='c'*40, gh_rc=0, changelog='# Changelog\n\nIntro.\n\n## v0.0.9 - 2026-11-15\n\n## v0.0.8\n', changelog_rc=0):
+               caller_sha='c'*40, gh_rc=0, changelog='# Changelog\n\nIntro.\n\n## v0.0.9 - 2026-11-15\n\n## v0.0.8\n', changelog_rc=0,
+               workflow_sha=None):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); output=root/'output'; (root/'caller').write_text(caller); (root/'changelog').write_text(changelog)
             fake=root/'gh'
@@ -1258,6 +1306,8 @@ class WorkflowIdentityTest(unittest.TestCase):
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'GITHUB_OUTPUT':str(output),
                  'WORKFLOW_REF':'sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@'+ref,
                  'CALLER_WORKFLOW_REF':caller_ref,'CALLER_WORKFLOW_SHA':caller_sha,'GH_TOKEN':'token'}
+            env.pop('WORKFLOW_SHA',None)
+            if workflow_sha is not None: env['WORKFLOW_SHA']=workflow_sha
             result=subprocess.run(['bash','-eo','pipefail','-c',step('Resolve workflow identity')],env=env,capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
             calls=(root/'calls').read_text() if (root/'calls').exists() else ''
@@ -1301,6 +1351,28 @@ class WorkflowIdentityTest(unittest.TestCase):
                 output,calls=self.pinned(uses+ref+' # v0.0.9\n',**kwargs)
                 self.assertNotIn('version=',output)
                 self.assertEqual(calls,'')
+
+    def test_branch_takes_the_version_from_the_changelog_at_the_resolved_commit(self):
+        uses='    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@stable\n'
+        base='identity=auto-reviewer-shared.yaml@stable\nref=stable\n'
+        output,calls=self.pinned(uses,ref='refs/heads/stable',workflow_sha='d'*40)
+        self.assertEqual(output,base+'version=v0.0.9\nsha='+'d'*40+'\n')
+        # Only the changelog at the resolved commit is read: a branch caller makes no claim.
+        self.assertEqual(calls.splitlines(),['api -H Accept: application/vnd.github.raw '
+                                             'repos/sentimony/github-workflows/contents/CHANGELOG.md?ref='+'d'*40])
+        output,_=self.pinned(uses+'    # v0.0.1\n',ref='refs/heads/stable',workflow_sha='d'*40,caller_sha='',caller_ref='')
+        self.assertEqual(output,base+'version=v0.0.9\nsha='+'d'*40+'\n')
+        for name,kwargs in [('no resolved commit',{}),('empty commit',{'workflow_sha':''}),
+                            ('short commit',{'workflow_sha':'d'*12}),('not a commit',{'workflow_sha':'refs/heads/stable'}),
+                            ('no version heading',{'workflow_sha':'d'*40,'changelog':'# Changelog\n\n## Unreleased\n'}),
+                            ('unreadable changelog',{'workflow_sha':'d'*40,'changelog_rc':1})]:
+            with self.subTest(name=name):
+                self.assertEqual(self.pinned(uses,ref='refs/heads/stable',**kwargs)[0],base)
+        # A branch named like a commit is still a branch; a tag never takes this path.
+        output,_=self.pinned(uses,ref='refs/heads/'+'b'*40,workflow_sha='d'*40)
+        self.assertEqual(output,'identity=auto-reviewer-shared.yaml@'+'b'*40+'\nref='+'b'*40+'\nversion=v0.0.9\nsha='+'d'*40+'\n')
+        output,calls=self.pinned(uses,ref='refs/tags/v0.0.9',workflow_sha='d'*40)
+        self.assertEqual((output,calls),('identity=auto-reviewer-shared.yaml@v0.0.9\nref=v0.0.9\n',''))
 
     def test_missing_or_unsafe_identity_fails_without_inventing_a_version(self):
         for ref in ['owner/repo/.github/workflows/auto-reviewer.yaml@v0.0.3', '', 'owner/repo/.github/workflows/caller.yaml@refs/tags/v0.0.3',
@@ -2128,12 +2200,14 @@ class SummaryRunTest(unittest.TestCase):
         self.assertNotIn('| Reviews |',body)
         self.assertNotIn('| Findings |',body)
         self.assertNotIn('| Duration total |',body)
-        self.assertIn('| Review | Model | Effort | Duration | Tokens | Cost |',body)
-        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 39 sec | 132,478 | $0.15 |',body)
-        self.assertIn('| 2 | claude-sonnet-5-5 | medium | 51 sec | 212,265 | $0.23 |',body)
-        self.assertIn('| **Total** | | | **90 sec** | **344,743** | **$0.37** |',body)
-        self.assertIn('| Mean | | | 45.00 sec | | |',body)
-        self.assertIn('| Measured | | | 2/2 | 2/2 | 2/2 |',body)
+        self.assertNotIn('| Mean |',body)
+        self.assertNotIn('| Measured |',body)
+        self.assertEqual([line for line in body.splitlines() if line.startswith('#')],
+                         ['## Review cycle summary','### Review usage'])
+        self.assertIn('| Review | Model | CI time | Model time | Tokens | Cost |',body)
+        self.assertIn('| 1 | `claude-sonnet-5-5 medium` | unknown | `39 sec` | `132,478` | `$0.15` |',body)
+        self.assertIn('| 2 | `claude-sonnet-5-5 medium` | unknown | `51 sec` | `212,265` | `$0.23` |',body)
+        self.assertIn('| **Total** | | **unknown** | **90 sec** | **344,743** | **$0.37** |',body)
 
     def test_approved_summary_keeps_missing_duration_aligned_with_its_review(self):
         first=self.review(101,None)
@@ -2142,11 +2216,9 @@ class SummaryRunTest(unittest.TestCase):
         state,_=self.run_summary({'reviews':[first,second,self.review(103,7)]})
         body=state['comments'][0]['body']
         self.assertIn('| 1 | unknown | unknown | unknown | unknown | unknown |',body)
-        self.assertIn('| 2 | claude-sonnet-5-5 | medium | 0 sec | 0 | $0.00 |',body)
-        self.assertIn('| **Total** | | | **7 sec** | **0** | **$0.00** |',body)
-        self.assertIn('| Mean | | | 3.50 sec | | |',body)
-        self.assertIn('| Measured | | | 2/3 | 1/3 | 1/3 |',body)
-        self.assertIn('| 3 | unknown | unknown | 7 sec | unknown | unknown |',body)
+        self.assertIn('| 2 | `claude-sonnet-5-5 medium` | unknown | `0 sec` | `0` | `$0.00` |',body)
+        self.assertIn('| **Total** | | **unknown** | **7 sec** | **0** | **$0.00** |',body)
+        self.assertIn('| 3 | unknown | unknown | `7 sec` | unknown | unknown |',body)
 
     def test_split_code_footer_and_older_formats_share_summary(self):
         split='Reviewed with: `auto-reviewer.yaml` `1a0e98e59aa772bb4c0b77d2dc4d2f9c6110e04e` workflow · `cr-request` `v0.0.16` skill · In `0 min 55 sec` · `claude-sonnet-5-5` `medium` · `289,723 tokens` · `$0.3138`'
@@ -2156,10 +2228,8 @@ class SummaryRunTest(unittest.TestCase):
                  for n,line in enumerate((split,combined,legacy),101)]
         state,_=self.run_summary({'reviews':reviews})
         body=state['comments'][0]['body']
-        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 55 sec | 289,723 | $0.31 |',body)
-        self.assertIn('| **Total** | | | **114 sec** | **423,201** | **$0.71** |',body)
-        self.assertIn('| Mean | | | 38.00 sec | | |',body)
-        self.assertIn('| Measured | | | 3/3 | 3/3 | 3/3 |',body)
+        self.assertIn('| 1 | `claude-sonnet-5-5 medium` | unknown | `55 sec` | `289,723` | `$0.31` |',body)
+        self.assertIn('| **Total** | | **unknown** | **114 sec** | **423,201** | **$0.71** |',body)
 
     def test_shared_workflow_and_old_workflow_footers_share_history(self):
         old='Reviewed with: `auto-reviewer.yaml` `v0.0.3` workflow · `cr-request` `v0.0.16` skill · In `0 min 55 sec` · `claude-sonnet-5-5` `medium` · `289,723 tokens` · `$0.3138`'
@@ -2168,16 +2238,14 @@ class SummaryRunTest(unittest.TestCase):
                  for n,line in enumerate((old,new),101)]
         state,_=self.run_summary({'reviews':reviews})
         body=state['comments'][0]['body']
-        self.assertIn('| **Total** | | | **110 sec** | **579,446** | **$0.63** |',body)
-        self.assertIn('| Measured | | | 2/2 | 2/2 | 2/2 |',body)
+        self.assertIn('| **Total** | | **unknown** | **110 sec** | **579,446** | **$0.63** |',body)
 
     def test_used_duration_without_usage_keeps_zero_distinct_from_unknown(self):
         line=USED_EXAMPLE.split(' · `claude-sonnet-5-5 medium`',1)[0]+' · `0 min 0 sec`'
         review=self.with_signature({'id':101,'user':{'login':'so-upstars'},'body':''},line)
         state,_=self.run_summary({'reviews':[review]})
         body=state['comments'][0]['body']
-        self.assertIn('| 1 | unknown | unknown | 0 sec | unknown | unknown |',body)
-        self.assertIn('| Measured | | | 1/1 | 0/1 | 0/1 |',body)
+        self.assertIn('| 1 | unknown | unknown | `0 sec` | unknown | unknown |',body)
 
     def test_used_footer_and_legacy_footer_share_summary_usage(self):
         legacy='Reviewed with: `cr-request@v0.0.16` skill · In 0 min 0 sec · `claude-sonnet-5-5 medium` · 0 tokens · $0.0000'
@@ -2185,9 +2253,22 @@ class SummaryRunTest(unittest.TestCase):
                  for n,line in enumerate((USED_EXAMPLE,legacy),101)]
         state,_=self.run_summary({'reviews':reviews})
         body=state['comments'][0]['body']
-        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 49 sec | 202,629 | $0.16 |',body)
-        self.assertIn('| **Total** | | | **49 sec** | **202,629** | **$0.16** |',body)
-        self.assertIn('| Measured | | | 2/2 | 2/2 | 2/2 |',body)
+        self.assertIn('| 1 | `claude-sonnet-5-5 medium` | unknown | `49 sec` | `202,629` | `$0.16` |',body)
+        self.assertIn('| **Total** | | **unknown** | **49 sec** | **202,629** | **$0.16** |',body)
+
+    def test_ci_and_model_times_have_their_own_columns(self):
+        both=USED_EXAMPLE.replace(' · `0 min 49 sec` · ',' · ci `5 min 51 sec` · model `0 min 49 sec` · ')
+        self.assertNotEqual(both,USED_EXAMPLE)
+        bare=both.split(' · `claude-sonnet-5-5 medium`',1)[0]+' · ci `1 min 30 sec` · model `0 min 7 sec`'
+        reviews=[self.with_signature({'id':n,'user':{'login':'so-upstars'},'body':''},line)
+                 for n,line in enumerate((both,USED_EXAMPLE,bare),101)]
+        state,_=self.run_summary({'reviews':reviews})
+        body=state['comments'][0]['body']
+        self.assertIn('| Review | Model | CI time | Model time | Tokens | Cost |',body)
+        self.assertIn('| 1 | `claude-sonnet-5-5 medium` | `351 sec` | `49 sec` | `202,629` | `$0.16` |',body)
+        self.assertIn('| 2 | `claude-sonnet-5-5 medium` | unknown | `49 sec` | `202,629` | `$0.16` |',body)
+        self.assertIn('| 3 | unknown | `90 sec` | `7 sec` | unknown | unknown |',body)
+        self.assertIn('| **Total** | | **441 sec** | **105 sec** | **405,258** | **$0.33** |',body)
 
     def test_pinned_commit_used_footer_feeds_summary_usage(self):
         pinned=USED_EXAMPLE.replace('[0.0.4](https://github.com/sentimony/github-workflows)',
@@ -2197,9 +2278,8 @@ class SummaryRunTest(unittest.TestCase):
                  for n,line in enumerate((pinned,pinned.split(' · `claude-sonnet-5-5 medium`',1)[0]+' · `0 min 7 sec`'),101)]
         state,_=self.run_summary({'reviews':reviews})
         body=state['comments'][0]['body']
-        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 49 sec | 202,629 | $0.16 |',body)
-        self.assertIn('| 2 | unknown | unknown | 7 sec | unknown | unknown |',body)
-        self.assertIn('| Measured | | | 2/2 | 1/2 | 1/2 |',body)
+        self.assertIn('| 1 | `claude-sonnet-5-5 medium` | unknown | `49 sec` | `202,629` | `$0.16` |',body)
+        self.assertIn('| 2 | unknown | unknown | `7 sec` | unknown | unknown |',body)
 
     def test_summary_is_a_table_with_per_review_usage(self):
         base='Reviewed with: `/cr-request` 0.0.11 skill · In 0 min 20 sec'
@@ -2211,12 +2291,10 @@ class SummaryRunTest(unittest.TestCase):
         self.assertEqual(summary_result(body,'Critical'),'0 + unknown')
         self.assertEqual(summary_result(body,'Important'),'3 + unknown')
         self.assertEqual(summary_result(body,'Minor'),'0 + unknown')
-        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 20 sec | 1,000 | $0.25 |',body)
-        self.assertIn('| 2 | claude-opus-5-5 | high | 20 sec | 2,500 | $1.00 |',body)
-        self.assertIn('| 3 | unknown | unknown | 20 sec | unknown | unknown |',body)
-        self.assertIn('| **Total** | | | **60 sec** | **3,500** | **$1.25** |',body)
-        self.assertIn('| Mean | | | 20.00 sec | | |',body)
-        self.assertIn('| Measured | | | 3/3 | 2/3 | 2/3 |',body)
+        self.assertIn('| 1 | `claude-sonnet-5-5 medium` | unknown | `20 sec` | `1,000` | `$0.25` |',body)
+        self.assertIn('| 2 | `claude-opus-5-5 high` | unknown | `20 sec` | `2,500` | `$1.00` |',body)
+        self.assertIn('| 3 | unknown | unknown | `20 sec` | unknown | unknown |',body)
+        self.assertIn('| **Total** | | **unknown** | **60 sec** | **3,500** | **$1.25** |',body)
 
     def test_summary_reads_new_footer_and_legacy_usage_together(self):
         modern='Reviewed with: `auto-reviewer.yaml@v0.0.3` workflow · `cr-request@v0.0.16` skill · In 0 min 39 sec · `claude-sonnet-5-5 medium` · 132,478 tokens · $0.1452'
@@ -2225,15 +2303,15 @@ class SummaryRunTest(unittest.TestCase):
         second=self.with_signature(self.review(102), legacy)
         state,_=self.run_summary({'reviews':[first,second]})
         body=state['comments'][0]['body']
-        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 39 sec | 132,478 | $0.15 |',body)
-        self.assertIn('| **Total** | | | **59 sec** | **133,478** | **$0.40** |',body)
-        self.assertEqual(summary_usage(body,'Total','Duration'),'59 sec')
+        self.assertIn('| 1 | `claude-sonnet-5-5 medium` | unknown | `39 sec` | `132,478` | `$0.15` |',body)
+        self.assertIn('| **Total** | | **unknown** | **59 sec** | **133,478** | **$0.40** |',body)
+        self.assertEqual(summary_usage(body,'Total','Model time'),'59 sec')
 
     def test_summary_without_recorded_usage_is_unknown(self):
         state,_=self.run_summary({'reviews':[self.review()]})
         body=state['comments'][0]['body']
-        self.assertIn('| 1 | unknown | unknown | 20 sec | unknown | unknown |',body)
-        self.assertIn('| **Total** | | | **20 sec** | **unknown** | **unknown** |',body)
+        self.assertIn('| 1 | unknown | unknown | `20 sec` | unknown | unknown |',body)
+        self.assertIn('| **Total** | | **unknown** | **20 sec** | **unknown** | **unknown** |',body)
 
     def test_no_reviews_and_legacy_duration(self):
         state,trace=self.run_summary({'reviews':[]})
@@ -2244,7 +2322,7 @@ class SummaryRunTest(unittest.TestCase):
         body=state['comments'][0]['body']
         for severity in ('Critical','Important','Minor'):
             self.assertEqual(summary_result(body,severity),'0 + unknown')
-        self.assertEqual(summary_usage(body,'Total','Duration'),'63 sec')
+        self.assertEqual(summary_usage(body,'Total','Model time'),'63 sec')
         self.assertEqual(sum(x['method']=='POST' and '/issues/42/comments' in x['endpoint'] for x in trace),1)
 
     def test_forged_marker_and_last_host_reply(self):
@@ -2256,13 +2334,13 @@ class SummaryRunTest(unittest.TestCase):
         state,_=self.run_summary({'reviews':[review], 'threads':[thread], 'comments':[fake]},repeat=True)
         self.assertEqual(len(state['comments']),2)
         self.assertEqual(summary_result(state['comments'][1]['body'],'Rejected'),'1')
-        self.assertEqual(summary_usage(state['comments'][1]['body'],'Mean','Duration'),'20.00 sec')
+        self.assertEqual(summary_usage(state['comments'][1]['body'],'Total','Model time'),'20 sec')
 
     def test_paginated_reviews_and_unknown_duration(self):
         reviews=[{'id':n,'user':{'login':'so-upstars'},'body':'legacy'} for n in range(1,102)]
         state,trace=self.run_summary({'reviews':reviews})
         self.assertEqual(sum(row['Review'].isdigit() for row in summary_table(state['comments'][0]['body'],'Review')),101)
-        self.assertEqual(summary_usage(state['comments'][0]['body'],'Total','Duration'),'unknown')
+        self.assertEqual(summary_usage(state['comments'][0]['body'],'Total','Model time'),'unknown')
         self.assertTrue(any('page=2' in x['endpoint'] for x in trace))
 
     def test_malformed_ledger_is_unknown_not_zero(self):
@@ -2273,7 +2351,7 @@ class SummaryRunTest(unittest.TestCase):
         for severity in ('Critical','Important','Minor'):
             self.assertEqual(summary_result(body,severity),'0 + unknown')
         self.assertEqual(summary_result(body,'Rejected'),'0 + unknown')
-        self.assertEqual(summary_usage(body,'Measured','Duration'),'0/1')
+        self.assertEqual(summary_usage(body,'1','Model time'),'unknown')
 
     def test_later_explicit_disposition_wins(self):
         review=self.review()
@@ -2300,8 +2378,7 @@ class SummaryRunTest(unittest.TestCase):
         self.assertEqual(summary_result(body,'Important'),'1')
         self.assertEqual(summary_result(body,'Undetermined'),'0')
         self.assertEqual(summary_result(body,'Rejected'),'1')
-        self.assertEqual(summary_usage(body,'Total','Duration'),'60 sec')
-        self.assertEqual(summary_usage(body,'Mean','Duration'),'30.00 sec')
+        self.assertEqual(summary_usage(body,'Total','Model time'),'60 sec')
 
     def defer_fixture(self):
         origin=self.review()
@@ -2410,7 +2487,7 @@ class SummaryRunTest(unittest.TestCase):
         existing={'id':7,'user':{'login':'so-upstars'},'body':'<!-- claude-review summary -->\nold'}
         state,trace=self.run_summary({'reviews':[self.review()],'comments':[existing]})
         self.assertEqual(len(state['comments']),1)
-        self.assertEqual(summary_usage(state['comments'][0]['body'],'Total','Duration'),'20 sec')
+        self.assertEqual(summary_usage(state['comments'][0]['body'],'Total','Model time'),'20 sec')
         self.assertEqual(sum(x['method']=='PATCH' for x in trace),1)
 
     def test_untrusted_host_marker_cannot_prove_rejection(self):

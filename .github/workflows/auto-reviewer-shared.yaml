@@ -108,7 +108,7 @@ jobs:
           # the thread helpers read the repository, PR number and reviewer it sets.
           __all__ = ['Stop', 'loads', 'encoded', 'gh', 'pages', 'positive', 'text', 'require', 'valid_path',
                      'finding_identity', 'valid_envelope', 'configure', 'query', 'threads', 'matching_thread',
-                     'markers', 'reviewed_with', 'reviewed_duration_re', 'used_duration_re']
+                     'markers', 'reviewed_with', 'reviewed_duration_re', 'used_duration_re', 'used_path_re']
 
           class Stop(Exception): pass
 
@@ -214,7 +214,9 @@ jobs:
           # Footer patterns of published reviews: the Reviewed with signature and the Used line.
           reviewed_with=r'^Reviewed with: (?:(?:`auto-reviewer(?:-shared)?\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer(?:-shared)?\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` [^\n]+) skill · In `?'
           reviewed_duration_re=re.compile(reviewed_with+r'([0-9]+) min ([0-9]+) sec`?(?: · .*)?$',re.M)
-          used_duration_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[(?:[A-Za-z0-9][A-Za-z0-9._/-]*|# v[0-9]+\.[0-9]+\.[0-9]+)\]\(https://github\.com/sentimony/github-workflows(?:/commit/[0-9a-f]{40})?\)</sup> · (?:`[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])? (?:low|medium|high)` · )?`([0-9]+) min ([0-9]+) sec`(?: · .*)?$',re.M)
+          used_duration_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[(?:[A-Za-z0-9][A-Za-z0-9._/-]*|# v[0-9]+\.[0-9]+\.[0-9]+)\]\(https://github\.com/sentimony/github-workflows(?:/commit/[0-9a-f]{40})?\)</sup> · (?:`[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])? (?:low|medium|high)` · )?(?:ci `[0-9]+ min [0-9]+ sec` · model )?`([0-9]+) min ([0-9]+) sec`(?: · .*)?$',re.M)
+          # The whole path, from the start of the triggering CI run to publication.
+          used_path_re=re.compile(r'^Used: .* · ci `([0-9]+) min ([0-9]+) sec` · model `[0-9]+ min [0-9]+ sec`(?: · .*)?$',re.M)
           disposition_re=re.compile(r'<!--\s*cr-received-disposition:v1\s+(\{.*?\})\s*-->',re.S)
           repo=number=reviewer=prefix=None
 
@@ -320,9 +322,9 @@ jobs:
                   Path('summary.txt').unlink(missing_ok=True)
                   sys.exit(0)
               all_threads=threads()
-              valid=[]; unknown=False; review_durations=[]; usages=[]
+              valid=[]; unknown=False; review_durations=[]; path_durations=[]; usages=[]
               usage_re=re.compile(reviewed_with+r'[0-9]+ min [0-9]+ sec`?(?: · `?([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?)`? `?(low|medium|high)`? · `?([0-9]+(?:,[0-9]{3})*) tokens`? · `?\$([0-9]+\.[0-9]{4})`?)?$',re.M)
-              used_usage_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[(?:[A-Za-z0-9][A-Za-z0-9._/-]*|# v[0-9]+\.[0-9]+\.[0-9]+)\]\(https://github\.com/sentimony/github-workflows(?:/commit/[0-9a-f]{40})?\)</sup> · `([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)` · `[0-9]+ min [0-9]+ sec` · `([0-9]+(?:,[0-9]{3})*) tokens` · `\$([0-9]+\.[0-9]{4})`$',re.M)
+              used_usage_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[(?:[A-Za-z0-9][A-Za-z0-9._/-]*|# v[0-9]+\.[0-9]+\.[0-9]+)\]\(https://github\.com/sentimony/github-workflows(?:/commit/[0-9a-f]{40})?\)</sup> · `([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)` · (?:ci `[0-9]+ min [0-9]+ sec` · model )?`[0-9]+ min [0-9]+ sec` · `([0-9]+(?:,[0-9]{3})*) tokens` · `\$([0-9]+\.[0-9]{4})`$',re.M)
               for r in reviews:
                   review_durations.append(None)
                   found_usage=usage_re.findall(r.get('body') or '') + used_usage_re.findall(r.get('body') or '')
@@ -340,6 +342,9 @@ jobs:
                       signature=reviewed_duration_re.findall(r.get('body') or '')
                       signature += used_duration_re.findall(r.get('body') or '')
                       if len(signature)==1 and int(signature[0][1])<60: review_durations[-1]=int(signature[0][0])*60+int(signature[0][1])
+                  # CI time is the whole path (`ci` in the Used footer); earlier reviews have none.
+                  path=used_path_re.findall(r.get('body') or '')
+                  path_durations.append(int(path[0][0])*60+int(path[0][1]) if len(path)==1 and int(path[0][1])<60 else None)
               durations=[d for d in review_durations if d is not None]
               origins={}
               for r,d in valid:
@@ -431,21 +436,23 @@ jobs:
                   '| '+' | '.join(values)+' |']
               # Rows show 2 decimals while the total sums the exact values: an accepted cent drift.
               measured=[u for u in usages if u]
+              # Headings follow the review comment: `##` titles the comment, `###` a visible section.
+              # Measured values are code spans, the Total row is bold, an unmeasured value is plain.
               lines+=['','### Review usage','',
-                  '| Review | Model | Effort | Duration | Tokens | Cost |',
+                  '| Review | Model | CI time | Model time | Tokens | Cost |',
                   '| --- | --- | --- | --- | --- | --- |']
-              for n,(u,duration) in enumerate(zip(usages,review_durations),1):
-                  elapsed=str(duration)+' sec' if duration is not None else 'unknown'
-                  usage=[u[0],u[1],elapsed,f'{int(u[2]):,}',f'${float(u[3]):.2f}'] if u else [
-                      'unknown','unknown',elapsed,'unknown','unknown']
+              code=lambda value: '`'+value+'`'
+              seconds=lambda value: code(str(value)+' sec') if value is not None else 'unknown'
+              for n,(u,duration,path) in enumerate(zip(usages,review_durations,path_durations),1):
+                  usage=[code(u[0]+' '+u[1]),seconds(path),seconds(duration),code(f'{int(u[2]):,}'),code(f'${float(u[3]):.2f}')] if u else [
+                      'unknown',seconds(path),seconds(duration),'unknown','unknown']
                   lines.append('| '+str(n)+' | '+' | '.join(usage)+' |')
+              paths=[p for p in path_durations if p is not None]
+              total_path=str(sum(paths))+' sec' if paths else 'unknown'
               total_duration=str(sum(durations))+' sec' if durations else 'unknown'
               total_tokens=f'{sum(int(u[2]) for u in measured):,}' if measured else 'unknown'
               total_cost=f'${sum(float(u[3]) for u in measured):.2f}' if measured else 'unknown'
-              lines.append(f'| **Total** | | | **{total_duration}** | **{total_tokens}** | **{total_cost}** |')
-              mean=f'{sum(durations)/len(durations):.2f} sec' if durations else 'unknown'
-              lines.append(f'| Mean | | | {mean} | | |')
-              lines.append(f'| Measured | | | {len(durations)}/{len(reviews)} | {len(measured)}/{len(reviews)} | {len(measured)}/{len(reviews)} |')
+              lines.append(f'| **Total** | | **{total_path}** | **{total_duration}** | **{total_tokens}** | **{total_cost}** |')
               Path('summary.txt').write_text('\n'.join(lines)+'\n',encoding='utf-8')
           except (Stop, ValueError, KeyError, TypeError, OSError):
               print('::error::Merged summary gathering failed', file=sys.stderr)
@@ -797,6 +804,7 @@ jobs:
       version: ${{ steps.skill.outputs.version }}
       workflow_identity: ${{ steps.workflow_identity.outputs.identity }}
       workflow_version: ${{ steps.workflow_identity.outputs.version }}
+      workflow_sha: ${{ steps.workflow_identity.outputs.sha }}
       threads_digest: ${{ steps.threads.outputs.digest }}
     env:
       NUMBER: ${{ needs.gate.outputs.number }}
@@ -1009,6 +1017,8 @@ jobs:
       # Used footer shows that comment. It is the caller's claim, read from the caller file at the
       # commit that runs, so it counts only when the newest CHANGELOG.md heading of this repository
       # at the pinned commit names the same version. A mismatch or a failed read leaves the SHA.
+      # A caller on a branch (`@stable`) makes no claim: the version is the newest CHANGELOG.md
+      # heading at job.workflow_sha, the commit the branch resolved to for this run.
       - name: Resolve workflow identity
         id: workflow_identity
         env:
@@ -1016,18 +1026,32 @@ jobs:
           WORKFLOW_REF: ${{ fromJSON(toJSON(job)).workflow_ref }}
           CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 -I - <<'PYCODE'
           import os, re, subprocess, sys
           source, separator, ref = os.environ['WORKFLOW_REF'].rpartition('@')
+          branch = False
           for prefix in ('refs/tags/', 'refs/heads/'):
               if ref.startswith(prefix):
                   ref = ref[len(prefix):]
+                  branch = prefix == 'refs/heads/'
                   break
           if (not separator or source.rsplit('/', 1)[-1] != 'auto-reviewer-shared.yaml'
                   or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,255}', ref)):
               sys.exit('Cannot determine a safe reusable workflow identity')
+          callee = source.split('/', 2)
+          safe_callee = len(callee) == 3 and all(re.fullmatch(r'[A-Za-z0-9._-]+', part) for part in callee[:2])
+          def fetch(owner, repo, path, at):
+              return subprocess.run(
+                  ['gh', 'api', '-H', 'Accept: application/vnd.github.raw',
+                   f'repos/{owner}/{repo}/contents/{path}?ref={at}'],
+                  check=True, capture_output=True, text=True, timeout=60).stdout.splitlines()
+          def released_at(commit):
+              heading = re.compile(r'## (v[0-9]+\.[0-9]+\.[0-9]+)(?: - .*)?')
+              return next((match.group(1) for match in
+                           map(heading.fullmatch, fetch(callee[0], callee[1], 'CHANGELOG.md', commit)) if match), None)
           def pinned_version():
               caller, _, _ = os.environ.get('CALLER_WORKFLOW_REF', '').rpartition('@')
               parts = caller.split('/', 2)
@@ -1036,14 +1060,6 @@ jobs:
                       or len(parts) != 3 or not re.fullmatch(r'\.github/workflows/[A-Za-z0-9._-]+\.ya?ml', parts[2])
                       or not all(re.fullmatch(r'[A-Za-z0-9._-]+', part) for part in parts[:2])):
                   return None
-              callee = source.split('/', 2)
-              if len(callee) != 3 or not all(re.fullmatch(r'[A-Za-z0-9._-]+', part) for part in callee[:2]):
-                  return None
-              def fetch(owner, repo, path, at):
-                  return subprocess.run(
-                      ['gh', 'api', '-H', 'Accept: application/vnd.github.raw',
-                       f'repos/{owner}/{repo}/contents/{path}?ref={at}'],
-                      check=True, capture_output=True, text=True, timeout=60).stdout.splitlines()
               try:
                   caller_lines = fetch(parts[0], parts[1], parts[2], sha)
                   pin = re.compile(r'[ \t]*uses:[ \t]*' + re.escape(source + '@' + ref)
@@ -1051,9 +1067,7 @@ jobs:
                   versions = {match.group(1) for match in map(pin.fullmatch, caller_lines) if match}
                   if len(versions) != 1:
                       return None
-                  heading = re.compile(r'## (v[0-9]+\.[0-9]+\.[0-9]+)(?: - .*)?')
-                  released = next((match.group(1) for match in
-                                   map(heading.fullmatch, fetch(callee[0], callee[1], 'CHANGELOG.md', ref)) if match), None)
+                  released = released_at(ref)
               except (OSError, subprocess.SubprocessError):
                   return None
               claimed = versions.pop()
@@ -1061,12 +1075,24 @@ jobs:
                   print(f'::warning::The caller names {claimed} for {ref}, the changelog there says {released}')
                   return None
               return claimed
-          version = pinned_version()
+          def branch_version(commit):
+              try:
+                  return released_at(commit)
+              except (OSError, subprocess.SubprocessError):
+                  return None
+          version = sha = None
+          if safe_callee and branch:
+              sha = os.environ.get('WORKFLOW_SHA', '')
+              version = branch_version(sha) if re.fullmatch(r'[0-9a-f]{40}', sha) else None
+          elif safe_callee:
+              version = pinned_version()
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
               output.write('identity=auto-reviewer-shared.yaml@' + ref + '\n')
               output.write('ref=' + ref + '\n')
               if version:
                   output.write('version=' + version + '\n')
+                  if branch:
+                      output.write('sha=' + sha + '\n')
           PYCODE
 
       # The duration in the signature line covers the agent step only, from here to the step after it.
@@ -1622,6 +1648,10 @@ jobs:
           VERSION: ${{ needs.review.outputs.version }}
           WORKFLOW_IDENTITY: ${{ needs.review.outputs.workflow_identity }}
           WORKFLOW_VERSION: ${{ needs.review.outputs.workflow_version }}
+          WORKFLOW_SHA: ${{ needs.review.outputs.workflow_sha }}
+          # The start of the CI run that triggered this review; other events start at this run.
+          CI_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           post_status() {
             gh api "repos/$REPO/statuses/$HEAD_SHA" -f state="$1" -f description="$2" \
@@ -1753,22 +1783,45 @@ jobs:
           ref, version, duration, model, effort, tokens, cost = footer.groups()
           if re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9._-]+)?', ref):
               ref = ref[1:]
-          # A pinned commit shows the version its caller names: `#` marks a commit pin, the link its SHA.
+          # A pinned commit shows the version its caller names, a branch the version at the commit it
+          # resolved to: `#` marks a version tied to a commit, the link its SHA.
           workflow_version = os.environ.get('WORKFLOW_VERSION', '')
+          # The review job outputs a commit only for a branch, also one named like a commit.
+          workflow_sha = os.environ.get('WORKFLOW_SHA', '') or ref
           workflow_link = f'[{ref}](https://github.com/sentimony/github-workflows)'
-          if re.fullmatch(r'[0-9a-f]{40}', ref) and re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', workflow_version):
-              workflow_link = f'[# {workflow_version}](https://github.com/sentimony/github-workflows/commit/{ref})'
+          if re.fullmatch(r'[0-9a-f]{40}', workflow_sha) and re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', workflow_version):
+              workflow_link = f'[# {workflow_version}](https://github.com/sentimony/github-workflows/commit/{workflow_sha})'
           used = (f'Used: `cr-request` <sup>[{version}](https://www.skills.sh/sentimony/agentic-workflow/cr-request)</sup>'
                   f' · `auto-reviewer-shared` <sup>{workflow_link}</sup>')
           if model is not None:
               used += f' · `{model} {effort}`'
-          used += f' · `{duration}`'
+          # `ci` is the whole path: from the start of the CI run that triggered the review (of this
+          # run for a review request or a dispatch) to this publication. `model` is the agent step.
+          def path_duration():
+              import subprocess, time
+              from datetime import datetime
+              started = os.environ.get('CI_STARTED_AT', '')
+              repo, run = os.environ.get('REPO', ''), os.environ.get('RUN_ID', '')
+              try:
+                  if not started and repo and run:
+                      started = subprocess.run(['gh', 'api', f'repos/{repo}/actions/runs/{run}', '--jq', '.run_started_at'],
+                                               check=True, capture_output=True, text=True, timeout=60).stdout.strip()
+                  if not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', started):
+                      return None
+                  seconds = int(time.time() - datetime.fromisoformat(started.replace('Z', '+00:00')).timestamp())
+              except (OSError, ValueError, subprocess.SubprocessError):
+                  return None
+              return f'{seconds // 60} min {seconds % 60} sec' if 0 <= seconds < 7 * 86400 else None
+          path = path_duration()
+          used += f' · ci `{path}` · model `{duration}`' if path else f' · `{duration}`'
           if tokens is not None:
               used += f' · `{tokens}` · `{cost}`'
           evidence = source[opening[0].end():closing[0].start()].strip('\n')
           marker = source.splitlines()[0]
           readiness = readiness[0][0].upper() + readiness[0][1:]
-          body = (marker + '\n\nReadiness: **' + readiness + '**\n\n' + table[0].strip()
+          # Headings: `##` titles the comment (here the readiness), `###` is a visible section,
+          # `####` a section inside Details. The merged summary follows the same rule.
+          body = (marker + '\n\n## Readiness: ' + readiness + '\n\n' + table[0].strip()
                   + '\n\n<details><summary>Details</summary>\n\n' + evidence
                   + '\n\n</details>\n\n' + used + '\n')
           Path(os.environ['POST_FILE']).write_text(body, encoding='utf-8')
@@ -2159,10 +2212,11 @@ jobs:
                   body=post.read_text(encoding='utf-8')
                   # Keep any independent readiness gap and any unassessed axis intact.
                   assessed = re.search(r'^\| *Intent *\| *System *\| *Craft *\| *Critical *\| *Important *\| *Minor *\|\s*\n[^\n]*\n\| *(PASS|FINDINGS|UNASSESSED) *\| *(PASS|FINDINGS|UNASSESSED) *\| *(PASS|FINDINGS|UNASSESSED) *\|', body, re.M)
-                  readiness_re=r'^(?:\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Rr]eady)|Readiness: \*\*(?:[Rr]eady with fixes|[Rr]eady)\*\*)$'
+                  readiness_re=r'^(?:\*\*Readiness:\*\* (?:[Rr]eady with fixes|[Rr]eady)|Readiness: \*\*(?:[Rr]eady with fixes|[Rr]eady)\*\*|## Readiness: (?:[Rr]eady with fixes|[Rr]eady))$'
                   if assessed and 'UNASSESSED' not in assessed.groups() and re.search(readiness_re, body, re.M):
-                      public = re.search(r'^Readiness: \*\*', body, re.M) is not None
-                      body,n=re.subn(readiness_re, 'Readiness: **Ready**' if public else '**Readiness:** Ready', body, flags=re.M)
+                      heading = re.search(r'^## Readiness: ', body, re.M) is not None
+                      public = heading or re.search(r'^Readiness: \*\*', body, re.M) is not None
+                      body,n=re.subn(readiness_re, '## Readiness: Ready' if heading else 'Readiness: **Ready**' if public else '**Readiness:** Ready', body, flags=re.M)
                       require(n==1, 'readiness line unavailable')
                       if not public:
                           body,n=re.subn(r'^Next step: .*$', 'Next step: `/verify -> /finalize squash`', body, flags=re.M)

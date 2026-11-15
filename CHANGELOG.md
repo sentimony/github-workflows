@@ -1,7 +1,38 @@
 # Changelog
 
 One version covers every workflow in this repository. Each version lists its changes
-per workflow, newest first. Callers pin the full SHA of the version's commit in `main`.
+per workflow, newest first. Callers follow the `stable` branch, which moves to the commit
+of each version in `main`, or pin the full SHA of such a commit.
+
+## v0.0.15 - 2026-11-15
+
+### promote-stable
+
+1. New workflow: after a green CI run on `main` it fast-forwards the `stable` branch to
+   that commit when the newest `CHANGELOG.md` version there differs from the one at
+   `stable`; a manual dispatch promotes the tip of `main` or a given commit of `main`. It
+   never moves `stable` back and pushes with the deploy key in `STABLE_DEPLOY_KEY`.
+
+### auto-reviewer-shared
+
+1. For a caller on a branch (`@stable`) the Used footer shows `# vX.Y.Z` linked to the
+   commit the branch resolved to: the newest `CHANGELOG.md` heading at `job.workflow_sha`.
+   A failed read keeps the branch name. Commit pins and tags behave as before.
+2. The Used footer shows two durations: `ci`, the whole path from the start of the CI run
+   that triggered the review (of the reviewer run for a review request or a dispatch) to
+   the publication, and `model`, the agent step. Without a readable start the footer
+   keeps the agent step alone. History readers accept both forms.
+3. The published review opens with the heading `## Readiness: <value>` in place of the
+   `Readiness: **<value>**` line. Headings follow one rule in both comment kinds: `##`
+   titles the comment, `###` a visible section, `####` a section inside Details. The
+   completion step updates either public form.
+4. The merged summary's Review usage table: Model and Effort are one column in a code
+   span, the durations are two columns (`CI time`, `Model time`), measured values are
+   code spans, and the Mean and Measured rows are gone. The Total row stays bold.
+
+### auto-reviewer
+
+1. The repository's own caller and the README caller examples reference `@stable`.
 
 ## v0.0.14 - 2026-11-15
 

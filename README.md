@@ -245,7 +245,8 @@ jobs:
 ## Offline checks
 
 From the repository root, run `python3 -m unittest discover -s tests -p 'test_*.py'` and
-`actionlint .github/workflows/*.yaml .github/workflows/*.yml`. To validate a caller
+`actionlint .github/workflows/*.yaml .github/workflows/*.yml`. The live skl-x install
+test needs the network and runs only with `AUTO_REVIEWER_LIVE=1`. To validate a caller
 against this checkout, run:
 
 ```sh

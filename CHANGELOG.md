@@ -3,6 +3,17 @@
 One version covers every workflow in this repository. Each version lists its changes
 per workflow, newest first. Callers pin the full SHA of the version's commit in `main`.
 
+## v0.0.12 - 2026-11-15
+
+### Tests
+
+1. `tests/test_skl_x_live.py` installs cr-request through the real `Install cr-request
+   skill` step and the real `skl-x`, then compares the installed directory with `git
+   archive` of the same ref: the newest release tag and the full SHA of `v0.0.10`
+   (`plugins/aw/skills/` layout). It runs only with `AUTO_REVIEWER_LIVE=1`; the new
+   `skl-x live install` workflow sets it weekly, on manual dispatch and on pull requests
+   that change the install step.
+
 ## v0.0.11 - 2026-11-15
 
 ### AGENTS.md

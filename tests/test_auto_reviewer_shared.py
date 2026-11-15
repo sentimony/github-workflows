@@ -1003,7 +1003,6 @@ class PublicPresentationTest(unittest.TestCase):
             env.pop('WORKFLOW_VERSION',None)
             env.pop('WORKFLOW_SHA',None)
             env.pop('CI_STARTED_AT',None)
-            env.pop('RUN_ID',None)
             if ci_started_at is not None: env['CI_STARTED_AT']=ci_started_at
             if workflow_version is not None: env['WORKFLOW_VERSION']=workflow_version
             if workflow_sha is not None: env['WORKFLOW_SHA']=workflow_sha
@@ -1280,6 +1279,42 @@ class ReadinessTest(unittest.TestCase):
                 result, output = gate.run_gate(gate.reviews(count, 0))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(f'review={str(allowed).lower()}', output)
+
+class PathStartTest(unittest.TestCase):
+    def record(self, ci_started_at='', api='2026-11-15T23:01:00Z', api_rc=0):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); output=root/'output'; fake=root/'gh'
+            fake.write_text('#!/bin/sh\necho "$*" >> '+str(root/'calls')+'\n[ '+str(api_rc)+' -eq 0 ] || exit '+str(api_rc)+'\necho "'+api+'"\n')
+            fake.chmod(0o755)
+            env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'GITHUB_OUTPUT':str(output),'GH_TOKEN':'token',
+                 'REPO':'owner/repo','RUN_ID':'77','CI_STARTED_AT':ci_started_at}
+            result=subprocess.run(['bash','--noprofile','--norc','-eo','pipefail','-c',step('Record path start')],env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            calls=(root/'calls').read_text() if (root/'calls').exists() else ''
+            return output.read_text(),calls
+
+    def test_triggering_ci_run_start_needs_no_api_call(self):
+        self.assertEqual(self.record('2026-11-15T21:53:11Z'),('at=2026-11-15T21:53:11Z\n',''))
+
+    def test_other_events_start_at_this_run(self):
+        output,calls=self.record()
+        self.assertEqual(output,'at=2026-11-15T23:01:00Z\n')
+        self.assertIn('repos/owner/repo/actions/runs/77',calls)
+
+    def test_unreadable_or_malformed_start_falls_back_to_now(self):
+        import re
+        for kwargs in ({'api_rc':1},{'api':'null'},{'api':''},{'ci_started_at':'yesterday','api':'unused'}):
+            with self.subTest(kwargs=kwargs):
+                output,_=self.record(**kwargs)
+                self.assertRegex(output,r'\Aat=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\n\Z')
+                self.assertNotIn('2026-11-15T23:01:00Z',output)
+
+    def test_publish_takes_the_start_from_the_gate_job(self):
+        text=WORKFLOW.read_text()
+        self.assertIn('      path_started_at: ${{ steps.path_start.outputs.at }}\n',text)
+        self.assertIn('          CI_STARTED_AT: ${{ needs.gate.outputs.path_started_at }}\n',text)
+        self.assertEqual(text.count('actions/runs/$RUN_ID'),1)
+
 
 class WorkflowIdentityTest(unittest.TestCase):
     def test_callee_tag_branch_and_sha_are_resolved_without_a_version_constant(self):

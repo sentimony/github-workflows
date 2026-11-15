@@ -4,6 +4,16 @@ One version covers every workflow in this repository. Each version lists its cha
 per workflow, newest first. Callers follow the `stable` branch, which moves to the commit
 of each version in `main`, or pin the full SHA of such a commit.
 
+## v0.0.16 - 2026-11-16
+
+### auto-reviewer-shared
+
+1. The `ci` duration of the Used footer was missing for a review started by a review
+   request or a dispatch: the publish job read the run's start through the API without
+   `actions: read`. The gate job, which has that permission, now records the start (the
+   triggering CI run's, else this run's, else its own time) and publish takes it from the
+   gate's output.
+
 ## v0.0.15 - 2026-11-15
 
 ### promote-stable

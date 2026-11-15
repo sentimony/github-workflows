@@ -517,7 +517,27 @@ jobs:
       base_sha: ${{ steps.gate.outputs.base_sha }}
       head_sha: ${{ steps.gate.outputs.head_sha }}
       ci_jobs: ${{ steps.gate.outputs.ci_jobs }}
+      path_started_at: ${{ steps.path_start.outputs.at }}
     steps:
+      # The Used footer's `ci` duration starts here: at the CI run that triggered this review,
+      # else at this run (a review request, a dispatch). Publish has no `actions: read`.
+      - name: Record path start
+        id: path_start
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          CI_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
+        shell: bash
+        run: |
+          started="$CI_STARTED_AT"
+          if [ -z "$started" ]; then
+            started=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq '.run_started_at' 2>/dev/null) || started=
+          fi
+          [[ "$started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "at=$started" >> "$GITHUB_OUTPUT"
+
       - name: Review gate decision
         id: gate
         env:
@@ -1649,9 +1669,8 @@ jobs:
           WORKFLOW_IDENTITY: ${{ needs.review.outputs.workflow_identity }}
           WORKFLOW_VERSION: ${{ needs.review.outputs.workflow_version }}
           WORKFLOW_SHA: ${{ needs.review.outputs.workflow_sha }}
-          # The start of the CI run that triggered this review; other events start at this run.
-          CI_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
-          RUN_ID: ${{ github.run_id }}
+          # Recorded by the gate job: the start of the CI run that triggered this review, else of this run.
+          CI_STARTED_AT: ${{ needs.gate.outputs.path_started_at }}
         run: |
           post_status() {
             gh api "repos/$REPO/statuses/$HEAD_SHA" -f state="$1" -f description="$2" \
@@ -1798,18 +1817,14 @@ jobs:
           # `ci` is the whole path: from the start of the CI run that triggered the review (of this
           # run for a review request or a dispatch) to this publication. `model` is the agent step.
           def path_duration():
-              import subprocess, time
+              import time
               from datetime import datetime
               started = os.environ.get('CI_STARTED_AT', '')
-              repo, run = os.environ.get('REPO', ''), os.environ.get('RUN_ID', '')
+              if not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', started):
+                  return None
               try:
-                  if not started and repo and run:
-                      started = subprocess.run(['gh', 'api', f'repos/{repo}/actions/runs/{run}', '--jq', '.run_started_at'],
-                                               check=True, capture_output=True, text=True, timeout=60).stdout.strip()
-                  if not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', started):
-                      return None
                   seconds = int(time.time() - datetime.fromisoformat(started.replace('Z', '+00:00')).timestamp())
-              except (OSError, ValueError, subprocess.SubprocessError):
+              except ValueError:
                   return None
               return f'{seconds // 60} min {seconds % 60} sec' if 0 <= seconds < 7 * 86400 else None
           path = path_duration()

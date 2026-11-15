@@ -797,6 +797,7 @@ jobs:
       version: ${{ steps.skill.outputs.version }}
       workflow_identity: ${{ steps.workflow_identity.outputs.identity }}
       workflow_version: ${{ steps.workflow_identity.outputs.version }}
+      workflow_sha: ${{ steps.workflow_identity.outputs.sha }}
       threads_digest: ${{ steps.threads.outputs.digest }}
     env:
       NUMBER: ${{ needs.gate.outputs.number }}
@@ -1009,6 +1010,8 @@ jobs:
       # Used footer shows that comment. It is the caller's claim, read from the caller file at the
       # commit that runs, so it counts only when the newest CHANGELOG.md heading of this repository
       # at the pinned commit names the same version. A mismatch or a failed read leaves the SHA.
+      # A caller on a branch (`@stable`) makes no claim: the version is the newest CHANGELOG.md
+      # heading at job.workflow_sha, the commit the branch resolved to for this run.
       - name: Resolve workflow identity
         id: workflow_identity
         env:
@@ -1016,18 +1019,32 @@ jobs:
           WORKFLOW_REF: ${{ fromJSON(toJSON(job)).workflow_ref }}
           CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ fromJSON(toJSON(job)).workflow_sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 -I - <<'PYCODE'
           import os, re, subprocess, sys
           source, separator, ref = os.environ['WORKFLOW_REF'].rpartition('@')
+          branch = False
           for prefix in ('refs/tags/', 'refs/heads/'):
               if ref.startswith(prefix):
                   ref = ref[len(prefix):]
+                  branch = prefix == 'refs/heads/'
                   break
           if (not separator or source.rsplit('/', 1)[-1] != 'auto-reviewer-shared.yaml'
                   or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,255}', ref)):
               sys.exit('Cannot determine a safe reusable workflow identity')
+          callee = source.split('/', 2)
+          safe_callee = len(callee) == 3 and all(re.fullmatch(r'[A-Za-z0-9._-]+', part) for part in callee[:2])
+          def fetch(owner, repo, path, at):
+              return subprocess.run(
+                  ['gh', 'api', '-H', 'Accept: application/vnd.github.raw',
+                   f'repos/{owner}/{repo}/contents/{path}?ref={at}'],
+                  check=True, capture_output=True, text=True, timeout=60).stdout.splitlines()
+          def released_at(commit):
+              heading = re.compile(r'## (v[0-9]+\.[0-9]+\.[0-9]+)(?: - .*)?')
+              return next((match.group(1) for match in
+                           map(heading.fullmatch, fetch(callee[0], callee[1], 'CHANGELOG.md', commit)) if match), None)
           def pinned_version():
               caller, _, _ = os.environ.get('CALLER_WORKFLOW_REF', '').rpartition('@')
               parts = caller.split('/', 2)
@@ -1036,14 +1053,6 @@ jobs:
                       or len(parts) != 3 or not re.fullmatch(r'\.github/workflows/[A-Za-z0-9._-]+\.ya?ml', parts[2])
                       or not all(re.fullmatch(r'[A-Za-z0-9._-]+', part) for part in parts[:2])):
                   return None
-              callee = source.split('/', 2)
-              if len(callee) != 3 or not all(re.fullmatch(r'[A-Za-z0-9._-]+', part) for part in callee[:2]):
-                  return None
-              def fetch(owner, repo, path, at):
-                  return subprocess.run(
-                      ['gh', 'api', '-H', 'Accept: application/vnd.github.raw',
-                       f'repos/{owner}/{repo}/contents/{path}?ref={at}'],
-                      check=True, capture_output=True, text=True, timeout=60).stdout.splitlines()
               try:
                   caller_lines = fetch(parts[0], parts[1], parts[2], sha)
                   pin = re.compile(r'[ \t]*uses:[ \t]*' + re.escape(source + '@' + ref)
@@ -1051,9 +1060,7 @@ jobs:
                   versions = {match.group(1) for match in map(pin.fullmatch, caller_lines) if match}
                   if len(versions) != 1:
                       return None
-                  heading = re.compile(r'## (v[0-9]+\.[0-9]+\.[0-9]+)(?: - .*)?')
-                  released = next((match.group(1) for match in
-                                   map(heading.fullmatch, fetch(callee[0], callee[1], 'CHANGELOG.md', ref)) if match), None)
+                  released = released_at(ref)
               except (OSError, subprocess.SubprocessError):
                   return None
               claimed = versions.pop()
@@ -1061,12 +1068,24 @@ jobs:
                   print(f'::warning::The caller names {claimed} for {ref}, the changelog there says {released}')
                   return None
               return claimed
-          version = pinned_version()
+          def branch_version(commit):
+              try:
+                  return released_at(commit)
+              except (OSError, subprocess.SubprocessError):
+                  return None
+          version = sha = None
+          if safe_callee and branch:
+              sha = os.environ.get('WORKFLOW_SHA', '')
+              version = branch_version(sha) if re.fullmatch(r'[0-9a-f]{40}', sha) else None
+          elif safe_callee:
+              version = pinned_version()
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
               output.write('identity=auto-reviewer-shared.yaml@' + ref + '\n')
               output.write('ref=' + ref + '\n')
               if version:
                   output.write('version=' + version + '\n')
+                  if branch:
+                      output.write('sha=' + sha + '\n')
           PYCODE
 
       # The duration in the signature line covers the agent step only, from here to the step after it.
@@ -1622,6 +1641,7 @@ jobs:
           VERSION: ${{ needs.review.outputs.version }}
           WORKFLOW_IDENTITY: ${{ needs.review.outputs.workflow_identity }}
           WORKFLOW_VERSION: ${{ needs.review.outputs.workflow_version }}
+          WORKFLOW_SHA: ${{ needs.review.outputs.workflow_sha }}
         run: |
           post_status() {
             gh api "repos/$REPO/statuses/$HEAD_SHA" -f state="$1" -f description="$2" \
@@ -1753,11 +1773,13 @@ jobs:
           ref, version, duration, model, effort, tokens, cost = footer.groups()
           if re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9._-]+)?', ref):
               ref = ref[1:]
-          # A pinned commit shows the version its caller names: `#` marks a commit pin, the link its SHA.
+          # A pinned commit shows the version its caller names, a branch the version at the commit it
+          # resolved to: `#` marks a version tied to a commit, the link its SHA.
           workflow_version = os.environ.get('WORKFLOW_VERSION', '')
+          workflow_sha = ref if re.fullmatch(r'[0-9a-f]{40}', ref) else os.environ.get('WORKFLOW_SHA', '')
           workflow_link = f'[{ref}](https://github.com/sentimony/github-workflows)'
-          if re.fullmatch(r'[0-9a-f]{40}', ref) and re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', workflow_version):
-              workflow_link = f'[# {workflow_version}](https://github.com/sentimony/github-workflows/commit/{ref})'
+          if re.fullmatch(r'[0-9a-f]{40}', workflow_sha) and re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', workflow_version):
+              workflow_link = f'[# {workflow_version}](https://github.com/sentimony/github-workflows/commit/{workflow_sha})'
           used = (f'Used: `cr-request` <sup>[{version}](https://www.skills.sh/sentimony/agentic-workflow/cr-request)</sup>'
                   f' · `auto-reviewer-shared` <sup>{workflow_link}</sup>')
           if model is not None:

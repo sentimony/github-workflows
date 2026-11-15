@@ -26,11 +26,13 @@ install as a plain directory without symbolic links, and must name its version.
 
 Published comments show readiness first, then the verdict table, a collapsed Details
 block, and a Used footer. The footer links skill and workflow versions in superscript,
-groups model and effort, and shows measured duration, tokens and cost. For a caller
-pinned to a commit the workflow version reads `# vX.Y.Z`: the comment of the caller's
-`uses:` line, linked to the pinned commit (`#` marks a commit pin). The comment counts
-only when the newest `CHANGELOG.md` heading at that commit names the same version;
-without the comment, or on a mismatch, the footer shows the SHA. The public
+groups model and effort, and shows measured duration, tokens and cost. The workflow
+version reads `# vX.Y.Z`, linked to the commit that ran (`#` marks a version tied to a
+commit). For a caller on a branch such as `@stable` it is the newest `CHANGELOG.md` heading
+at the commit the branch resolved to for that run; when it cannot be read, the footer shows
+the branch name. For a caller pinned to a commit it is the comment of the caller's `uses:`
+line, which counts only when the newest `CHANGELOG.md` heading at that commit names the
+same version; without the comment, or on a mismatch, the footer shows the SHA. The public
 comment omits Next step; the reviewer's internal draft retains its validated contract. The
 workflow itself appends the draft's signature and, when the model's is missing or invalid,
 the Next step line, closes an unclosed Details block, and, when the draft still fails its
@@ -89,20 +91,26 @@ configuration validation still applies.
 
 ### Callers
 
-Callers pin `auto-reviewer-shared.yaml` to the full SHA of a commit in `main` and name its
-CHANGELOG version in a comment: `@<sha> # vX.Y.Z`. A caller can move to a commit as soon as
-it is merged; no tag is needed.
+Callers reference `auto-reviewer-shared.yaml@stable`. `stable` is a branch that always
+points to a released commit of `main`: the `Promote stable` workflow fast-forwards it after
+a green CI run on `main` whose newest `CHANGELOG.md` version differs from the one at
+`stable`, so every caller follows a release without a change of its own. Its manual
+dispatch promotes the tip of `main` or a given commit of `main`. Rulesets let only
+repository admins, maintainers and the promotion deploy key update `stable`; only an admin
+can move it back or delete it. A caller that must not follow releases pins the full SHA of
+a commit in `main` and names its CHANGELOG version in a comment instead:
+`@<sha> # vX.Y.Z`.
 `workflow_run` uses the caller workflow
 definition on its default branch; pull request events use the PR branch copy.
 `workflow_dispatch` becomes available once the workflow exists on the default branch.
-Live equivalence requires runs against the pinned callee.
+Live equivalence requires runs against the referenced callee.
 
 Changes between versions are listed in [CHANGELOG.md](CHANGELOG.md). Tags up to `v0.0.8`
 exist and never move; later versions get a tag only on the owner's request.
 
 This repository's `.github/workflows/auto-reviewer.yaml`, named `Auto Reviewer`,
-pins `.github/workflows/auto-reviewer-shared.yaml` the same way, with the `validate`
-CI job. The reusable workflow is named `Auto Reviewer (Shared)`.
+references `.github/workflows/auto-reviewer-shared.yaml@stable` the same way, with the
+`validate` CI job. The reusable workflow is named `Auto Reviewer (Shared)`.
 
 Configure Actions secrets in each consumer repository:
 
@@ -158,7 +166,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@d431253a764823c2414bf51e496b8a8c65adef78 # v0.0.13
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@stable
     with:
       required-ci-job: validate
       pr: ${{ inputs.pr || '' }}
@@ -194,7 +202,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@d431253a764823c2414bf51e496b8a8c65adef78 # v0.0.13
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@stable
     with:
       required-ci-job: check
       pr: ${{ inputs.pr || '' }}
@@ -230,7 +238,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@d431253a764823c2414bf51e496b8a8c65adef78 # v0.0.13
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@stable
     with:
       required-ci-jobs: |
         Lint

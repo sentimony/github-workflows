@@ -979,7 +979,7 @@ USED_EXAMPLE = 'Used: `cr-request` <sup>[0.0.16](https://www.skills.sh/sentimony
 
 
 class PublicPresentationTest(unittest.TestCase):
-    def render(self, readiness='Ready', ref='v0.0.4', usage=True, reversed_footer=False, details='<details open><summary>Details</summary>', full=False, evidence='Full evidence.', extra_before='', extra_after='', row='| PASS | PASS | PASS | 0 | 0 | 0 |', workflow_version=None):
+    def render(self, readiness='Ready', ref='v0.0.4', usage=True, reversed_footer=False, details='<details open><summary>Details</summary>', full=False, evidence='Full evidence.', extra_before='', extra_after='', row='| PASS | PASS | PASS | 0 | 0 | 0 |', workflow_version=None, workflow_sha=None):
         signature=f'Reviewed with: `auto-reviewer-shared.yaml` `{ref}` workflow · `cr-request` `v0.0.16` skill · In `0 min 49 sec`'
         if usage:
             signature+=' · `claude-sonnet-5-5` `medium` · `202,629 tokens` · `$0.1634`'
@@ -995,7 +995,9 @@ class PublicPresentationTest(unittest.TestCase):
             env={**os.environ,'BODY_FILE':str(root/'draft'),'POST_FILE':str(root/'post'),'SIGNATURE':signature,'INTERNAL_SIGNATURE':signature,
                  'LAST_LINE':footer[-1]}
             env.pop('WORKFLOW_VERSION',None)
+            env.pop('WORKFLOW_SHA',None)
             if workflow_version is not None: env['WORKFLOW_VERSION']=workflow_version
+            if workflow_sha is not None: env['WORKFLOW_SHA']=workflow_sha
             if full:
                 fake=root/'gh'
                 fake.write_text('#!/bin/sh\ncase "$2" in\n  */status[?]*) echo run-url ;;\n  */pulls/42) echo '+('a'*40)+' ;;\n'
@@ -1101,6 +1103,24 @@ class PublicPresentationTest(unittest.TestCase):
                 shown=ref[1:] if ref=='v0.0.4' else ref
                 self.assertIn('<sup>['+shown+'](https://github.com/sentimony/github-workflows)</sup>',body)
                 self.assertNotIn('# v',body)
+
+    def test_branch_shows_the_version_of_the_commit_it_resolved_to(self):
+        sha='ab928503b0e21a3e98f7ba34ee9eeb22066cfca8'
+        shown='`auto-reviewer-shared` <sup>[# v0.0.15](https://github.com/sentimony/github-workflows/commit/'+sha+')</sup>'
+        result,body,_,_=self.render(ref='stable',workflow_version='v0.0.15',workflow_sha=sha)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn(' · '+shown+' · `claude-sonnet-5-5 medium` · ',body)
+        self.assertNotIn('[stable]',body)
+        # Without a full commit SHA or a vX.Y.Z version the branch name stays.
+        for version,commit in (('v0.0.15',''),('v0.0.15',sha[:12]),('v0.0.15',sha+')](x'),('',sha),('0.0.15',sha)):
+            with self.subTest(version=version,commit=commit):
+                result,body,_,_=self.render(ref='stable',workflow_version=version,workflow_sha=commit)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn('<sup>[stable](https://github.com/sentimony/github-workflows)</sup>',body)
+                self.assertNotIn('# v',body)
+        # A commit pin links its own SHA, whatever WORKFLOW_SHA says.
+        result,body,_,_=self.render(ref=sha,workflow_version='v0.0.9',workflow_sha='c'*40)
+        self.assertIn('[# v0.0.9](https://github.com/sentimony/github-workflows/commit/'+sha+')',body)
 
 
 class FooterTest(unittest.TestCase):
@@ -1247,7 +1267,8 @@ class WorkflowIdentityTest(unittest.TestCase):
                 self.assertEqual(output.read_text(),'identity=auto-reviewer-shared.yaml@'+expected+'\nref='+expected+'\n')
 
     def pinned(self, caller, ref='b'*40, caller_ref='owner/repo/.github/workflows/auto-reviewer.yaml@refs/heads/main',
-               caller_sha='c'*40, gh_rc=0, changelog='# Changelog\n\nIntro.\n\n## v0.0.9 - 2026-11-15\n\n## v0.0.8\n', changelog_rc=0):
+               caller_sha='c'*40, gh_rc=0, changelog='# Changelog\n\nIntro.\n\n## v0.0.9 - 2026-11-15\n\n## v0.0.8\n', changelog_rc=0,
+               workflow_sha=None):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); output=root/'output'; (root/'caller').write_text(caller); (root/'changelog').write_text(changelog)
             fake=root/'gh'
@@ -1258,6 +1279,8 @@ class WorkflowIdentityTest(unittest.TestCase):
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'GITHUB_OUTPUT':str(output),
                  'WORKFLOW_REF':'sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@'+ref,
                  'CALLER_WORKFLOW_REF':caller_ref,'CALLER_WORKFLOW_SHA':caller_sha,'GH_TOKEN':'token'}
+            env.pop('WORKFLOW_SHA',None)
+            if workflow_sha is not None: env['WORKFLOW_SHA']=workflow_sha
             result=subprocess.run(['bash','-eo','pipefail','-c',step('Resolve workflow identity')],env=env,capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
             calls=(root/'calls').read_text() if (root/'calls').exists() else ''
@@ -1301,6 +1324,28 @@ class WorkflowIdentityTest(unittest.TestCase):
                 output,calls=self.pinned(uses+ref+' # v0.0.9\n',**kwargs)
                 self.assertNotIn('version=',output)
                 self.assertEqual(calls,'')
+
+    def test_branch_takes_the_version_from_the_changelog_at_the_resolved_commit(self):
+        uses='    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@stable\n'
+        base='identity=auto-reviewer-shared.yaml@stable\nref=stable\n'
+        output,calls=self.pinned(uses,ref='refs/heads/stable',workflow_sha='d'*40)
+        self.assertEqual(output,base+'version=v0.0.9\nsha='+'d'*40+'\n')
+        # Only the changelog at the resolved commit is read: a branch caller makes no claim.
+        self.assertEqual(calls.splitlines(),['api -H Accept: application/vnd.github.raw '
+                                             'repos/sentimony/github-workflows/contents/CHANGELOG.md?ref='+'d'*40])
+        output,_=self.pinned(uses+'    # v0.0.1\n',ref='refs/heads/stable',workflow_sha='d'*40,caller_sha='',caller_ref='')
+        self.assertEqual(output,base+'version=v0.0.9\nsha='+'d'*40+'\n')
+        for name,kwargs in [('no resolved commit',{}),('empty commit',{'workflow_sha':''}),
+                            ('short commit',{'workflow_sha':'d'*12}),('not a commit',{'workflow_sha':'refs/heads/stable'}),
+                            ('no version heading',{'workflow_sha':'d'*40,'changelog':'# Changelog\n\n## Unreleased\n'}),
+                            ('unreadable changelog',{'workflow_sha':'d'*40,'changelog_rc':1})]:
+            with self.subTest(name=name):
+                self.assertEqual(self.pinned(uses,ref='refs/heads/stable',**kwargs)[0],base)
+        # A branch named like a commit is still a branch; a tag never takes this path.
+        output,_=self.pinned(uses,ref='refs/heads/'+'b'*40,workflow_sha='d'*40)
+        self.assertEqual(output,'identity=auto-reviewer-shared.yaml@'+'b'*40+'\nref='+'b'*40+'\nversion=v0.0.9\nsha='+'d'*40+'\n')
+        output,calls=self.pinned(uses,ref='refs/tags/v0.0.9',workflow_sha='d'*40)
+        self.assertEqual((output,calls),('identity=auto-reviewer-shared.yaml@v0.0.9\nref=v0.0.9\n',''))
 
     def test_missing_or_unsafe_identity_fails_without_inventing_a_version(self):
         for ref in ['owner/repo/.github/workflows/auto-reviewer.yaml@v0.0.3', '', 'owner/repo/.github/workflows/caller.yaml@refs/tags/v0.0.3',

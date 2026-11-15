@@ -16,7 +16,9 @@ code span, and retains measured duration, tokens and cost without a Next step li
 For a caller pinned to a full commit SHA the workflow link reads `# vX.Y.Z` (the comment
 of the caller's `uses:` line, read from the caller file at the running commit and accepted
 only when the newest `CHANGELOG.md` heading at the pinned commit names the same version)
-and points to the pinned commit; other refs, a missing comment and a mismatch keep the ref
+and points to the pinned commit. For a caller on a branch (`@stable`) the link reads the
+newest `CHANGELOG.md` heading at the commit the branch resolved to (`job.workflow_sha`) and
+points to that commit. A tag, a missing comment, a mismatch and a failed read keep the ref
 as the link text.
 History readers accept both forms of the Used footer and the released split, combined
 and skill-only footers. The ledger marker and schema remain unchanged.

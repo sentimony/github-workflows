@@ -2493,5 +2493,21 @@ printf '%s\\trefs/tags/v0.0.9\\n%s\\trefs/tags/v0.0.10\\n%s\\trefs/tags/latest\\
     def test_missing_version_rejected(self):
         self.assert_rejected('noversion', 'No version in the cr-request SKILL.md')
 
+class ReviewerEnvTest(unittest.TestCase):
+    def test_every_step_reading_reviewer_has_it_in_env(self):
+        ruby = os.environ.get('RUBY', 'ruby')
+        script = "require 'yaml'; require 'json'; puts JSON.generate(YAML.load_file(ARGV[0], aliases: true)['jobs'])"
+        jobs = json.loads(subprocess.check_output([ruby, '-e', script, str(WORKFLOW)], text=True))
+        missing = []
+        for job_name, job in jobs.items():
+            for step in job.get('steps') or []:
+                run = step.get('run') or ''
+                if "os.environ['REVIEWER']" not in run and 'env.REVIEWER' not in run and '$REVIEWER' not in run:
+                    continue
+                env = {**(job.get('env') or {}), **(step.get('env') or {})}
+                if 'REVIEWER' not in env:
+                    missing.append(f"{job_name}: {step.get('name')}")
+        self.assertEqual(missing, [])
+
 if __name__ == '__main__':
     unittest.main()

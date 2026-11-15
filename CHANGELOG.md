@@ -3,6 +3,17 @@
 One release tag covers every workflow in this repository. Each release lists its changes
 per workflow, newest first.
 
+## v0.0.9
+
+### auto-reviewer-shared
+
+1. The "Resolve verified review threads" job gets `REVIEWER` in its environment. Without
+   it the job failed with `KeyError: 'REVIEWER'` whenever a clean review left an earlier
+   thread to resolve, and the `Auto Reviewer` status turned to failure with "Review
+   actions remain pending". A test now checks that every step reading `REVIEWER` has it.
+2. The README's secret steps add that a private repository of a personal account needs a
+   classic PAT of `yngwald` with `repo` scope.
+
 ## v0.0.8 - 2026-11-15
 
 ### auto-reviewer-shared

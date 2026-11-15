@@ -3,6 +3,16 @@
 One version covers every workflow in this repository. Each version lists its changes
 per workflow, newest first. Callers pin the full SHA of the version's commit in `main`.
 
+## v0.0.11 - 2026-11-15
+
+### AGENTS.md
+
+1. Rule 9: Actions secrets stay in each consumer repository, because the sentimony
+   organization is on GitHub Free, where organization secrets do not reach private
+   repositories.
+2. Rule 10: `invalid header field value for "Authorization"` from `gh` in a job means a
+   malformed secret value, not missing permissions. No workflow changes.
+
 ## v0.0.10 - 2026-11-15
 
 ### auto-reviewer-shared

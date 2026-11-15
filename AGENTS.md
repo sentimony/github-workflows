@@ -64,6 +64,6 @@ against `.github/workflows/auto-reviewer.yaml` with `--required-ci-job validate`
    private repositories, even when the REST list shows their names. Check the plan
    (`gh api orgs/<org> --jq .plan.name`) before proposing a migration.
 10. `invalid header field value for "Authorization"` from `gh` in a job means a malformed
-    secret value (an extra line or space), not missing permissions: the request never
-    left the runner. Ask the owner to re-save the PAT as one line without printing it,
-    then rerun the failed jobs if the head is unchanged.
+    secret value (a newline or another control character), not missing permissions: the
+    request never left the runner. Ask the owner to re-save the PAT as one line without
+    printing it, then rerun the failed jobs if the head is unchanged.

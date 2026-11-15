@@ -100,10 +100,16 @@ CI job. The reusable workflow is named `Auto Reviewer (Shared)`.
 
 Configure Actions secrets in each consumer repository:
 
-1. Create `AUTO_REVIEWER_YNGWALD` and `CLAUDE_CODE_OAUTH_TOKEN`, with separate token
+1. For a new `sentimony` repository, create the `AUTO_REVIEWER_YNGWALD` value as a
+   fine-grained PAT of `yngwald` with resource owner `sentimony`, only that repository,
+   and Pull requests and Issues set to Read and write. It creates a request the org owner
+   approves at `github.com/organizations/sentimony/settings/personal-access-token-requests`.
+   Copy the value with "Copy token", not from a screenshot, and check that `gh api user`
+   returns `yngwald` with it.
+2. Create `AUTO_REVIEWER_YNGWALD` and `CLAUDE_CODE_OAUTH_TOKEN`, with separate token
    values for each repository.
-2. Update the caller to read `secrets.AUTO_REVIEWER_YNGWALD`, as shown below.
-3. Delete the old repository secret `YNGWALD_PR_TOKEN` after all workflows in that
+3. Update the caller to read `secrets.AUTO_REVIEWER_YNGWALD`, as shown below.
+4. Delete the old repository secret `YNGWALD_PR_TOKEN` after all workflows in that
    repository use the new secret name.
 
 For `v0.0.3`, bind the input directly to the repository secret of the same name:

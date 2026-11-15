@@ -1,9 +1,17 @@
 # Changelog
 
-One release tag covers every workflow in this repository. Each release lists its changes
-per workflow, newest first.
+One version covers every workflow in this repository. Each version lists its changes
+per workflow, newest first. Callers pin the full SHA of the version's commit in `main`.
 
-## v0.0.9
+## v0.0.10 - 2026-11-15
+
+### auto-reviewer-shared
+
+1. Callers pin the reusable workflow to a full commit SHA with the version in a comment
+   (`@<sha> # vX.Y.Z`) and no longer wait for a tag. The README examples, this
+   repository's caller and the rules in `AGENTS.md` follow; the workflow is unchanged.
+
+## v0.0.9 - 2026-11-15
 
 ### auto-reviewer-shared
 

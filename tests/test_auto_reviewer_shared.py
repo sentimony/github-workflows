@@ -1244,7 +1244,7 @@ class UsageRecordTest(unittest.TestCase):
             root=Path(tmp); (root/'.auto-reviewer').mkdir()
             sig=f'Reviewed with: `auto-reviewer-shared.yaml` `{workflow_ref}` workflow · `cr-request` `v{version}` skill'
             (root/'.auto-reviewer/review.md').write_text('<!-- m -->\nbody\n\n'+sig+'\nNext step: `/cr-received PR #1`\n')
-            env={**os.environ,'START':'0','SIGNATURE':sig,'SEP':' · ','USAGE_MODEL':model,'USAGE_EFFORT':effort}
+            env={**os.environ,'START':'0','SIGNATURE':sig,'SEP':' · ','USAGE_MODEL':model,'USAGE_EFFORT':effort,'BODY_FILE_PATH':'.auto-reviewer/review.md','NUMBER':'1'}
             if execution is not None:
                 (root/'exec.json').write_text(raw if raw is not None else json.dumps(execution)); env['EXEC_FILE']=str(root/'exec.json')
             run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))',f'elapsed={elapsed}')
@@ -1272,6 +1272,184 @@ class UsageRecordTest(unittest.TestCase):
         self.assertEqual(self.run_duration([],raw='not json'),duration)
         self.assertEqual(self.run_duration([{'type':'system'}]),duration)
         self.assertEqual(self.run_duration([{'type':'result','usage':{}}]),duration)
+
+class DeterministicTrailerTest(unittest.TestCase):
+    SIG='Reviewed with: `auto-reviewer-shared.yaml` `v0.0.6` workflow · `cr-request` `v0.0.11` skill'
+    NEXT='Next step: `/verify -> /finalize squash`'
+    TABLE='| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | PASS | %s | %s | %s |'
+
+    def finish(self, trailer, counts=(0,0,0)):
+        body='<!-- m -->\n'+self.TABLE%counts+'\n\n**Readiness:** Ready\n\n<details><summary>Details</summary>\n\nEvidence.\n\n</details>\n'+trailer
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); (root/'.auto-reviewer').mkdir()
+            (root/'.auto-reviewer/review.md').write_text(body)
+            env={**os.environ,'START':'0','SIGNATURE':self.SIG,'SEP':' · ','USAGE_MODEL':'m','USAGE_EFFORT':'medium','BODY_FILE_PATH':'.auto-reviewer/review.md','NUMBER':'7'}
+            env.pop('EXEC_FILE',None)
+            run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))','elapsed=125')
+            result=subprocess.run(['bash','-eo','pipefail','-c',run],cwd=root,env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            return (root/'.auto-reviewer/review.md').read_text()
+
+    def test_missing_malformed_and_correct_trailers_publish_the_same_body(self):
+        good=self.SIG+' · In `9 min 9 sec`\n'+self.NEXT+'\n'
+        cases={'missing':'',
+               'correct':good,
+               'malformed signature':'Reviewed with: something else\n'+self.NEXT+'\n',
+               'malformed next step':self.SIG+'\nNext step: verify it - then merge\n',
+               'reversed order':self.NEXT+'\n'+self.SIG+' · In `1 min 1 sec`\n',
+               'blank lines and CRLF':'\r\n'+self.SIG+'\r\n\r\n'+self.NEXT+'\r\n\r\n'}
+        results={name:self.finish(trailer) for name,trailer in cases.items()}
+        expected=results['correct']
+        self.assertTrue(expected.endswith('\n\n'+self.SIG+' · In `2 min 5 sec`\n'+self.NEXT+'\n'),expected)
+        for name,body in results.items():
+            with self.subTest(case=name):
+                self.assertEqual(body,expected)
+
+    def test_validator_accepts_the_normalized_body(self):
+        script=step('Validate review body')
+        fragment='fail() { exit 1; }\n'+script[script.index('tail2=$(tr -d'):script.index('# The Next step line loses')]
+        for trailer in ('','Reviewed with: broken\n'):
+            with self.subTest(trailer=trailer),tempfile.TemporaryDirectory() as tmp:
+                path=Path(tmp)/'body'; path.write_text(self.finish(trailer))
+                env={**os.environ,'BODY_FILE':str(path),'VERSION':'0.0.11','WORKFLOW_IDENTITY':'auto-reviewer-shared.yaml@v0.0.6'}
+                result=subprocess.run(['bash','-c',fragment],env=env,capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_fallback_next_step_follows_the_finding_counts(self):
+        self.assertTrue(self.finish('',(0,0,0)).endswith(self.NEXT+'\n'))
+        for counts in ((1,0,0),(0,2,0),(0,0,3)):
+            with self.subTest(counts=counts):
+                self.assertTrue(self.finish('',counts).endswith('Next step: `/cr-received PR #7`\n'))
+
+    def test_fallback_next_step_needs_a_plain_ready(self):
+        trailer='<details><summary>Details</summary>\n\nEvidence.\n\n</details>\n'
+        for readiness in ('Not ready','Ready with fixes'):
+            with self.subTest(readiness=readiness):
+                body='<!-- m -->\n'+self.TABLE%(0,0,0)+'\n\n**Readiness:** '+readiness+'\n\n'+trailer
+                with tempfile.TemporaryDirectory() as tmp:
+                    root=Path(tmp); (root/'.auto-reviewer').mkdir()
+                    (root/'.auto-reviewer/review.md').write_text(body)
+                    env={**os.environ,'START':'0','SIGNATURE':self.SIG,'SEP':' · ','USAGE_MODEL':'m','USAGE_EFFORT':'medium','BODY_FILE_PATH':'.auto-reviewer/review.md','NUMBER':'7'}
+                    env.pop('EXEC_FILE',None)
+                    run=step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))','elapsed=1')
+                    result=subprocess.run(['bash','-eo','pipefail','-c',run],cwd=root,env=env,capture_output=True,text=True)
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    self.assertTrue((root/'.auto-reviewer/review.md').read_text().endswith('Next step: `/cr-received PR #7`\n'))
+
+    def test_valid_agent_next_step_is_kept(self):
+        body=self.finish(self.SIG+'\nNext step: `/cr-received PR #7` · two findings\n',(0,1,0))
+        self.assertTrue(body.endswith('Next step: `/cr-received PR #7` · two findings\n'))
+
+
+def step_env(name):
+    ruby = os.environ.get('RUBY', 'ruby')
+    script = "require 'yaml'; require 'json'; w=YAML.load_file(ARGV[0], aliases: true); s=w['jobs'].values.flat_map{|j| j['steps'] || []}.find{|x| x['name']==ARGV[1]}; abort 'missing step' unless s; puts JSON.generate(s.fetch('env', {}))"
+    return json.loads(subprocess.check_output([ruby, '-e', script, str(WORKFLOW), name], text=True))
+
+
+class RetryTest(unittest.TestCase):
+    LOW = r'$\color{green}◎$ Low'
+    TABLE = '| Intent | System | Craft | Critical | Important | Minor |\n| --- | --- | --- | --- | --- | --- |\n| PASS | PASS | FINDINGS | 0 | 0 | 1 |'
+
+    def body(self, details_close='</details>', details_open='<details><summary>Details</summary>', readiness='**Readiness:** Not ready'):
+        return ('<!-- m -->\n\n' + self.TABLE + '\n\n' + readiness + '\n\n' + details_open + '\n\n- ' + self.LOW
+                + ' R2-F1 [`src/a.py:1`](url) issue\n\n' + details_close + '\n')
+
+    def precheck(self, body, comment_id='R2-F1'):
+        draft = {'schema_version':1, 'repository':'owner/repo', 'pr_number':42, 'head_sha':'a'*40,
+                 'review_source_id':None, 'previous_findings':[],
+                 'findings':[{'origin_review_id':None, 'original_id':'R2-F1', 'path':'src/a.py', 'severity':'Minor'}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); (root/'.auto-reviewer').mkdir()
+            (root/'.auto-reviewer/review.md').write_text(body)
+            (root/'.auto-reviewer/review-actions.json').write_text(json.dumps(draft))
+            (root/'.auto-reviewer/comments.json').write_text(json.dumps([{'path':'src/a.py','line':1,'body':self.LOW+' '+comment_id+' - issue'}]))
+            output = root/'output'
+            env = {**os.environ, **step_env('Pre-validate review draft'), 'NUMBER':'42', 'HEAD_SHA':'a'*40, 'REPO':'owner/repo',
+                   'GITHUB_OUTPUT':str(output)}
+            result = subprocess.run(['bash','-eo','pipefail','-c',step('Pre-validate review draft')], cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            error = (root/'.auto-reviewer/retry-error.txt').read_text() if (root/'.auto-reviewer/retry-error.txt').exists() else ''
+            return (output.read_text() if output.exists() else ''), error
+
+    def test_precheck_uses_the_publish_actions_validator_verbatim(self):
+        self.assertEqual(step_env('Pre-validate review draft')['VALIDATE_ACTIONS'], step('Validate review actions'))
+
+    def test_valid_draft_needs_no_retry(self):
+        self.assertEqual(self.precheck(self.body()), ('', ''))
+
+    def test_inline_finding_mismatch_requests_a_retry_with_the_error(self):
+        output, error = self.precheck(self.body(), comment_id='R2-F9')
+        self.assertEqual(output, 'error=true\n')
+        self.assertIn('inline finding mismatch', error)
+
+    def test_structure_errors_request_a_retry(self):
+        cases = {'no closing line': self.body(details_close=''),
+                 'two details': self.body().replace('</details>', '<details><summary>Other</summary>\n</details>\n</details>'),
+                 'no readiness': self.body(readiness='')}
+        for name, body in cases.items():
+            with self.subTest(case=name):
+                output, error = self.precheck(body)
+                self.assertEqual(output, 'error=true\n')
+                self.assertIn('review body structure', error)
+
+    def test_precheck_agrees_with_the_publish_renderer_on_details_counts(self):
+        for details_close in ('</details>', ''):
+            with self.subTest(close=details_close):
+                body = self.body(details_close=details_close)
+                precheck_failed = self.precheck(body)[0] != ''
+                self.assertEqual(precheck_failed, details_close == '')
+
+    def test_unclosed_details_is_closed_by_the_workflow(self):
+        broken = self.body(details_close='')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); (root/'.auto-reviewer').mkdir()
+            (root/'.auto-reviewer/review.md').write_text(broken)
+            sig = DeterministicTrailerTest.SIG
+            env = {**os.environ, 'START':'0', 'SIGNATURE':sig, 'SEP':' · ', 'USAGE_MODEL':'m', 'USAGE_EFFORT':'medium',
+                   'BODY_FILE_PATH':'.auto-reviewer/review.md', 'NUMBER':'42'}
+            env.pop('EXEC_FILE', None)
+            run = step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))', 'elapsed=3')
+            result = subprocess.run(['bash','-eo','pipefail','-c',run], cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            fixed = (root/'.auto-reviewer/review.md').read_text()
+        self.assertIn('issue\n\n</details>\n\n' + sig, fixed)
+        self.assertEqual(self.precheck(fixed), ('', ''))
+
+    def test_retry_usage_adds_to_the_first_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); (root/'.auto-reviewer').mkdir()
+            (root/'.auto-reviewer/review.md').write_text(self.body())
+            for name, tokens, cost in (('one.json', 100, 0.25), ('two.json', 50, 0.125)):
+                (root/name).write_text(json.dumps([{'type':'result','total_cost_usd':cost,'usage':{'input_tokens':tokens}}]))
+            (root/'retry-exec-file').write_text(str(root/'two.json'))
+            env = {**os.environ, 'START':'0', 'SIGNATURE':DeterministicTrailerTest.SIG, 'SEP':' · ', 'USAGE_MODEL':'m', 'USAGE_EFFORT':'medium',
+                   'BODY_FILE_PATH':'.auto-reviewer/review.md', 'NUMBER':'42', 'EXEC_FILE':str(root/'one.json'), 'RUNNER_TEMP':str(root)}
+            run = step('Add review duration').replace('elapsed=$(( $(date +%s) - START ))', 'elapsed=3')
+            result = subprocess.run(['bash','-eo','pipefail','-c',run], cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('`m` `medium` · `150 tokens` · `$0.3750`', (root/'.auto-reviewer/review.md').read_text())
+
+    def test_retry_step_runs_once_on_the_precheck_error_with_the_same_prompt(self):
+        ruby = os.environ.get('RUBY', 'ruby')
+        script = "require 'yaml'; require 'json'; w=YAML.load_file(ARGV[0], aliases: true); puts JSON.generate(w['jobs']['review']['steps'])"
+        steps = json.loads(subprocess.check_output([ruby, '-e', script, str(WORKFLOW)], text=True))
+        first = next(s for s in steps if s.get('id') == 'claude')
+        retry = next(s for s in steps if s.get('id') == 'claude_retry')
+        self.assertEqual(retry['if'], "steps.precheck.outputs.error == 'true'")
+        self.assertTrue(retry['continue-on-error'])
+        self.assertEqual(retry['uses'], first['uses'])
+        self.assertEqual(retry['with']['prompt'], first['with']['prompt'])
+        self.assertEqual(retry['with']['claude_args'], first['with']['claude_args'])
+        self.assertIn('.auto-reviewer/retry-error.txt', first['with']['prompt'])
+        names = [s.get('id') or s.get('name') for s in steps]
+        self.assertEqual(names.count('claude_retry'), 1)
+        self.assertLess(names.index('claude'), names.index('precheck'))
+        self.assertLess(names.index('precheck'), names.index('claude_retry'))
+        after = names[names.index('claude_retry'):]
+        self.assertIn('Add review duration', after)
+        self.assertIn('Check inline comments', after)
+
 
 class TokenFilterTest(unittest.TestCase):
     def test_atlassian_prefix_is_blocked_in_every_transport(self):
@@ -1364,7 +1542,7 @@ class SummaryRefreshTest(unittest.TestCase):
             state={'merged':True,'reviews':[],'comments':[],'threads':[]}
             (root/'state.json').write_text(json.dumps(state))
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],
-                 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42'}
+                 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42','REVIEWER':'so-upstars','GH_TOKEN':'token'}
             def invoke(job):
                 for item in jobs[job]['steps']:
                     result=subprocess.run(['bash','-eo','pipefail','-c',step(item['name'])],cwd=root,env=env,capture_output=True,text=True)
@@ -1386,7 +1564,7 @@ class SummaryRefreshTest(unittest.TestCase):
             os.symlink(ROOT/'tests/fixtures/auto-reviewer-shared/gh_summary',root/'gh')
             (root/'state.json').write_text(json.dumps({'merged':False,'reviews':[],'comments':[]}))
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],
-                 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42',
+                 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42','REVIEWER':'so-upstars','GH_TOKEN':'token',
                  'SUMMARY_REFRESH':job['env']['SUMMARY_REFRESH']}
             for item in job['steps']:
                 result=subprocess.run(['bash','-eo','pipefail','-c',step(item['name'])],cwd=root,env=env,capture_output=True,text=True)
@@ -1412,7 +1590,7 @@ class SummaryParserTest(unittest.TestCase):
                 self.assertEqual(int(p.stdout),expected)
 
 class GateTest(unittest.TestCase):
-    def run_gate(self, reviews=(), labels=(), action='', event='pull_request', requested=False, ci='success', jobs=None, author='author', source_events=None, runs=None, required_jobs=None, skippable_jobs=None, event_pr='42', ci_job=None, max_rounds='', total_override=None):
+    def run_gate(self, reviews=(), labels=(), action='', event='pull_request', requested=False, ci='success', jobs=None, author='author', source_events=None, runs=None, required_jobs=None, skippable_jobs=None, event_pr='42', ci_job=None, max_rounds='', total_override=None, ci_jobs=None, ci_workflow='ci.yml', review_changed_head=False, has_token=True, diffs=None, reviewer_login='so-upstars'):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
             pr={'head':{'sha':'a'*40,'repo':{'full_name':'owner/repo'}}, 'base':{'sha':'b'*40},
@@ -1426,6 +1604,7 @@ class GateTest(unittest.TestCase):
                     'status':'completed' if ci in ('success','failure') else ci,
                     'conclusion':ci if ci in ('success','failure') else None}]
             (root/'data.json').write_text(json.dumps({'pr':pr,'reviews':reviews,'runs':runs,
+                'diffs':diffs or {},
                 'jobs':jobs if jobs is not None else [{'name':n,'conclusion':'success'} for n in required_jobs]}))
             fake=root/'gh'
             fake.write_text('''#!/usr/bin/env python3
@@ -1436,7 +1615,11 @@ d=json.load(open(os.environ['DATA']))
 endpoint=next((x for x in args if x.startswith('repos/')), '')
 if '/statuses/' in endpoint: sys.exit(0)
 if '/commits/' in endpoint and '/status?' in endpoint: print('false'); sys.exit(0)
-if '/actions/workflows/ci.yml/runs?' in endpoint:
+if '/compare/' in endpoint:
+    pair=endpoint.split('/compare/')[1]
+    if pair not in d['diffs']: sys.exit(1)
+    sys.stdout.write(d['diffs'][pair]); sys.exit(0)
+if '/actions/workflows/'+os.environ['CI_WORKFLOW']+'/runs?' in endpoint:
     if 'head_sha='+'a'*40 not in endpoint: sys.exit(2)
     source=json.dumps({'workflow_runs':d['runs']})
     result=subprocess.run(['jq','-r',args[args.index('--jq')+1]],input=source,text=True,capture_output=True)
@@ -1453,11 +1636,14 @@ sys.exit(2)
 ''')
             fake.chmod(0o755)
             env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'DATA':str(root/'data.json'),
-                 'REPO':'owner/repo','REVIEWER':'so-upstars','RUN_SHA':'','RUN_HEAD_REPO':'',
+                 'REPO':'owner/repo','REVIEWER':reviewer_login,'RUN_SHA':'','RUN_HEAD_REPO':'',
                  'API_MARKER':str(root/'api-called'),
-                 'REQUIRED_CI_JOB': required_jobs[0] if ci_job is None else ci_job,
-                 'CLAUDE_REVIEW_MAX_ROUNDS':max_rounds,'CI_EVENTS':json.dumps(source_events),
-                 'SKIPPABLE_JOBS':json.dumps(skippable_jobs),
+                 'REQUIRED_CI_JOB': (required_jobs[0] if ci_job is None else ci_job) if ci_jobs is None else '',
+                 'REQUIRED_CI_JOBS': ci_jobs or '', 'CI_WORKFLOW': ci_workflow,
+                 'REVIEW_CHANGED_HEAD': 'true' if review_changed_head else 'false',
+                 'HAS_REVIEWER_TOKEN': 'true' if has_token else 'false',
+                 'CLAUDE_REVIEW_MAX_ROUNDS':max_rounds,'CI_EVENTS':','.join(source_events),
+                 'SKIPPABLE_CI_JOBS':','.join(skippable_jobs),
                  'EVENT_PR':event_pr,'EVENT_NAME':event,'EVENT_ACTION':action,'CONTEXT':'Auto Reviewer',
                  'RUN_URL':'url','GITHUB_OUTPUT':str(root/'output'),'GITHUB_STEP_SUMMARY':str(root/'summary')}
             source=step('Review gate decision')
@@ -1634,13 +1820,95 @@ sys.exit(2)
                     self.assertIn(f'review={str(allowed).lower()}', output)
 
     def test_invalid_ci_job_fails_before_api(self):
-        for job in ('', 'a b', '"x"', '["validate"]', 'a","b', '1job', '-job', 'x\ny', 'x\n'):
+        for job in ('', ' ', ',', '"x"', '["validate"]', 'a","b', '1job', '-job', 'x\n$(id)', 'a;b'):
             with self.subTest(job=job):
                 result, output = self.run_gate(ci_job=job)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn('review=true', output)
                 self.assertIn('error', result.stdout.lower())
                 self.assertFalse(result.api_called)
+
+    def test_several_ci_jobs_are_all_required(self):
+        for lst in ('Lint\nUnit tests', 'Lint, Unit tests', 'Lint,Unit tests'):
+            names=['Lint','Unit tests']
+            with self.subTest(lst=lst):
+                result, output = self.run_gate(ci_jobs=lst, required_jobs=names)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('review=true', output)
+                self.assertIn('ci_jobs=Lint, Unit tests', output)
+                result, output = self.run_gate(ci_jobs=lst, required_jobs=names,
+                    jobs=[{'name':'Lint','conclusion':'success'}])
+                self.assertIn('review=false', output)
+                result, output = self.run_gate(ci_jobs=lst, required_jobs=names,
+                    jobs=[{'name':'Lint','conclusion':'success'},{'name':'Unit tests','conclusion':'failure'}])
+                self.assertIn('review=false', output)
+        result, output = self.run_gate(ci_jobs='a,b\nc', required_jobs=['a,b','c'])
+        self.assertIn('review=true', output)
+        # required-ci-job and required-ci-jobs are merged
+        result, output = self.run_gate(ci_job='Lint', required_jobs=['Lint'],
+            jobs=[{'name':'Lint','conclusion':'success'}])
+        self.assertIn('ci_jobs=Lint', output)
+
+    def test_skippable_list_and_custom_ci_source(self):
+        result, output = self.run_gate(required_jobs=['Docs','Lint'], ci_jobs='Docs,Lint', skippable_jobs=['Docs'],
+            jobs=[{'name':'Docs','conclusion':'skipped'},{'name':'Lint','conclusion':'success'}])
+        self.assertIn('review=true', output)
+        result, output = self.run_gate(required_jobs=['Docs','Lint'], ci_jobs='Docs,Lint', skippable_jobs=['Docs'],
+            jobs=[{'name':'Docs','conclusion':'success'},{'name':'Lint','conclusion':'skipped'}])
+        self.assertIn('review=false', output)
+        result, output = self.run_gate(ci_workflow='build.yaml', source_events=['pull_request'])
+        self.assertIn('review=true', output)
+        for bad in ('../x.yml', 'ci', 'a/b.yml', 'ci.yml x', ''):
+            with self.subTest(workflow=bad):
+                result, output = self.run_gate(ci_workflow=bad)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(result.api_called)
+        for bad in ('', 'Push', 'a b;c', '$(id)'):
+            with self.subTest(events=bad):
+                result, output = self.run_gate(source_events=[bad], runs=[])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(result.api_called)
+
+    def test_missing_reviewer_token_fails_before_api(self):
+        result, output = self.run_gate(has_token=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('AUTO_REVIEWER_TOKEN', result.stdout)
+        self.assertFalse(result.api_called)
+
+    def test_invalid_reviewer_login_fails_before_api(self):
+        for login in ('', 'a b', 'x;y', '-x', 'x-', '$(id)'):
+            with self.subTest(login=login):
+                result, output = self.run_gate(reviewer_login=login)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(result.api_called)
+
+    def test_review_changed_head(self):
+        old_head='c'*40; base='b'*40
+        diff=lambda body: f'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-x\n+{body}\n'
+        pair=lambda head: f'{base}...{head}'
+        clean=self.reviews(0,1,clean=True)
+        cases=[
+            # (flag, diffs, expected review, reason)
+            (False, {pair(old_head):diff('a'), pair('a'*40):diff('b')}, False, 'no Critical or Important'),
+            (True, {pair(old_head):diff('a'), pair('a'*40):diff('b')}, True, ''),
+            (True, {pair(old_head):diff('a'), pair('a'*40):diff('a')}, False, 'diff did not change'),
+            (True, {pair(old_head):diff('a')}, True, 'comparison unavailable'),
+            (True, {}, True, 'comparison unavailable'),
+        ]
+        for flag, diffs, expected, text in cases:
+            with self.subTest(flag=flag, expected=expected, text=text):
+                result, output = self.run_gate(clean, review_changed_head=flag, diffs=diffs)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f'review={str(expected).lower()}', output)
+                self.assertIn(text, result.stdout)
+        # The round limit still applies to a changed head.
+        result, output = self.run_gate(clean, review_changed_head=True, max_rounds='1',
+            diffs={pair(old_head):diff('a'), pair('a'*40):diff('b')})
+        self.assertIn('review=false', output)
+        self.assertIn('limit 1', result.stdout)
+        # A review of the same head is still skipped.
+        result, output = self.run_gate(self.reviews(0,1,clean=True,samehead=True), review_changed_head=True)
+        self.assertIn('review=false', output)
 
     def test_manual_only_and_latest_usable_summary(self):
         # Manual reviews count even with no marked summary; another author does not count.
@@ -1684,32 +1952,37 @@ sys.exit(2)
         triggers=workflow.get('on',workflow.get('true',{}))
         self.assertEqual(set(triggers), {'workflow_call'})
         call=triggers['workflow_call']
-        self.assertEqual(set(call['inputs']), {'required-ci-job', 'pr'})
-        self.assertEqual(call['inputs']['required-ci-job']['type'], 'string')
-        self.assertTrue(call['inputs']['required-ci-job']['required'])
-        for name in ('pr',):
-            self.assertEqual(call['inputs'][name]['type'], 'string')
+        defaults={'required-ci-job':'','required-ci-jobs':'','skippable-ci-jobs':'','pr':'',
+                  'ci-events':'push,workflow_dispatch','ci-workflow':'ci.yml','reviewer':'yngwald',
+                  'review-changed-head':False}
+        self.assertEqual(set(call['inputs']), set(defaults))
+        for name, default in defaults.items():
+            self.assertEqual(call['inputs'][name]['type'], 'boolean' if name=='review-changed-head' else 'string')
             self.assertFalse(call['inputs'][name]['required'])
-            self.assertEqual(call['inputs'][name]['default'], '')
-        self.assertEqual(set(call['secrets']), {'AUTO_REVIEWER_YNGWALD', 'CLAUDE_CODE_OAUTH_TOKEN'})
-        self.assertTrue(all(x['required'] for x in call['secrets'].values()))
+            self.assertEqual(call['inputs'][name]['default'], default)
+        self.assertEqual(set(call['secrets']), {'AUTO_REVIEWER_TOKEN', 'AUTO_REVIEWER_YNGWALD', 'CLAUDE_CODE_OAUTH_TOKEN'})
+        self.assertEqual({k for k,x in call['secrets'].items() if x.get('required')}, {'CLAUDE_CODE_OAUTH_TOKEN'})
         gate=next(s for s in workflow['jobs']['gate']['steps'] if s.get('id')=='gate')
-        self.assertEqual(gate['env']['REVIEWER'],ADAPTER['reviewer'])
+        self.assertEqual(gate['env']['REVIEWER'],'${{ inputs.reviewer }}')
         self.assertEqual(gate['env']['REQUIRED_CI_JOB'], '${{ inputs.required-ci-job }}')
+        self.assertEqual(gate['env']['REQUIRED_CI_JOBS'], '${{ inputs.required-ci-jobs }}')
+        self.assertEqual(gate['env']['SKIPPABLE_CI_JOBS'], '${{ inputs.skippable-ci-jobs }}')
+        self.assertEqual(gate['env']['CI_WORKFLOW'], '${{ inputs.ci-workflow }}')
+        self.assertEqual(gate['env']['REVIEW_CHANGED_HEAD'], '${{ inputs.review-changed-head }}')
         self.assertEqual(gate['env']['CLAUDE_REVIEW_MAX_ROUNDS'], '${{ vars.CLAUDE_REVIEW_MAX_ROUNDS }}')
         self.assertNotIn('REQUIRED_JOBS', gate['env'])
-        self.assertEqual(json.loads(gate['env']['CI_EVENTS']),ADAPTER['events'])
-        self.assertEqual(json.loads(gate['env']['SKIPPABLE_JOBS']),ADAPTER['skippable_jobs'])
+        self.assertEqual(gate['env']['CI_EVENTS'],'${{ inputs.ci-events }}')
         self.assertIn('inputs.'+ADAPTER['dispatch'],gate['env']['EVENT_PR'])
         self.assertNotIn('inputs.pr_number',gate['env']['EVENT_PR'])
         self.assertIn('inputs.'+ADAPTER['dispatch'],workflow['concurrency']['group'])
         self.assertNotIn('inputs.pr_number',workflow['concurrency']['group'])
-        self.assertEqual(workflow['jobs']['publish']['env']['REVIEWER'],ADAPTER['reviewer'])
-        self.assertEqual(workflow['jobs']['complete']['env']['REVIEWER'],ADAPTER['reviewer'])
+        for job in ('merged_summary','refresh_merged_summary','publish','complete'):
+            self.assertEqual(workflow['jobs'][job]['env']['REVIEWER'],'${{ inputs.reviewer }}')
+        self.assertNotIn("'yngwald'",WORKFLOW.read_text())
         secrets=[s.get('env',{}).get('GH_TOKEN','') for job in workflow['jobs'].values()
                  for s in job.get('steps',[]) if 'secrets.' in s.get('env',{}).get('GH_TOKEN','')]
         self.assertTrue(secrets)
-        self.assertEqual(set(secrets),{'${{ secrets.'+ADAPTER['secret']+' }}'})
+        self.assertEqual(set(secrets),{'${{ secrets.AUTO_REVIEWER_TOKEN || secrets.'+ADAPTER['secret']+' }}'})
         review=workflow['jobs']['review']
         agent=next(s for s in review['steps'] if s.get('id')=='claude')
         self.assertIn('--model ${{ steps.model.outputs.model }}',agent['with']['claude_args'])
@@ -1722,7 +1995,7 @@ sys.exit(2)
         self.assertTrue(workflow['concurrency']['cancel-in-progress'])
         self.assertTrue(review['concurrency']['cancel-in-progress'])
         triggers=workflow.get('on',workflow.get('true',{}))
-        self.assertIn('CI (${{ inputs.required-ci-job }}) is green', agent['with']['prompt'])
+        self.assertIn('CI (${{ needs.gate.outputs.ci_jobs }}) is green', agent['with']['prompt'])
         self.assertNotIn('CI (validate) is green', agent['with']['prompt'])
         install=step('Install cr-request skill')
         self.assertIn('REVIEW_SKILLS_REF',install)
@@ -1747,7 +2020,7 @@ class SummaryRunTest(unittest.TestCase):
             root=Path(tmp)
             os.symlink(ROOT/'tests/fixtures/auto-reviewer-shared/gh_summary',root/'gh')
             (root/'state.json').write_text(json.dumps(state))
-            env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'], 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42'}
+            env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'], 'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42','REVIEWER':'so-upstars','GH_TOKEN':'token'}
             def invoke(name):
                 return subprocess.run(['bash','-eo','pipefail','-c',step(name)],cwd=root,env=env,capture_output=True,text=True)
             gather=invoke('Gather merged review summary')
@@ -2040,7 +2313,7 @@ class SummaryRunTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); os.symlink(ROOT/'tests/fixtures/auto-reviewer-shared/gh_summary',root/'gh')
             (root/'state.json').write_text(json.dumps({'merged':False,'reviews':[self.review()]}))
-            env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42'}
+            env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'FIXTURE_DIR':str(root),'REPO':'owner/repo','NUMBER':'42','REVIEWER':'so-upstars','GH_TOKEN':'token'}
             result=subprocess.run(['bash','-eo','pipefail','-c',step('Gather merged review summary')],cwd=root,env=env,capture_output=True,text=True)
             self.assertNotEqual(result.returncode,0)
             self.assertFalse((root/'summary.txt').exists())
@@ -2219,6 +2492,22 @@ printf '%s\\trefs/tags/v0.0.9\\n%s\\trefs/tags/v0.0.10\\n%s\\trefs/tags/latest\\
 
     def test_missing_version_rejected(self):
         self.assert_rejected('noversion', 'No version in the cr-request SKILL.md')
+
+class ReviewerEnvTest(unittest.TestCase):
+    def test_every_step_reading_reviewer_has_it_in_env(self):
+        ruby = os.environ.get('RUBY', 'ruby')
+        script = "require 'yaml'; require 'json'; puts JSON.generate(YAML.load_file(ARGV[0], aliases: true)['jobs'])"
+        jobs = json.loads(subprocess.check_output([ruby, '-e', script, str(WORKFLOW)], text=True))
+        missing = []
+        for job_name, job in jobs.items():
+            for step in job.get('steps') or []:
+                run = step.get('run') or ''
+                if "os.environ['REVIEWER']" not in run and 'env.REVIEWER' not in run and '$REVIEWER' not in run:
+                    continue
+                env = {**(job.get('env') or {}), **(step.get('env') or {})}
+                if 'REVIEWER' not in env:
+                    missing.append(f"{job_name}: {step.get('name')}")
+        self.assertEqual(missing, [])
 
 if __name__ == '__main__':
     unittest.main()

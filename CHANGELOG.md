@@ -3,7 +3,7 @@
 One version covers every workflow in this repository. Each version lists its changes
 per workflow, newest first. Callers pin the full SHA of the version's commit in `main`.
 
-## v0.0.11 - 2026-11-15
+## v0.0.12 - 2026-11-15
 
 ### Tests
 

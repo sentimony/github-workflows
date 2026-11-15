@@ -84,18 +84,19 @@ configuration validation still applies.
 
 ### Callers
 
-Callers target `auto-reviewer-shared.yaml@v0.0.4`. Publish that tag before using these examples; GitHub cannot
-resolve a reusable workflow at a tag that does not yet exist.
+Callers pin `auto-reviewer-shared.yaml` to the full SHA of a commit in `main` and name its
+CHANGELOG version in a comment: `@<sha> # vX.Y.Z`. A caller can move to a commit as soon as
+it is merged; no tag is needed.
 `workflow_run` uses the caller workflow
 definition on its default branch; pull request events use the PR branch copy.
 `workflow_dispatch` becomes available once the workflow exists on the default branch.
-Live equivalence requires runs against the tagged callee.
+Live equivalence requires runs against the pinned callee.
 
-Release tags are immutable: a published tag never moves. Changes between tags are listed
-in [CHANGELOG.md](CHANGELOG.md).
+Changes between versions are listed in [CHANGELOG.md](CHANGELOG.md). Tags up to `v0.0.8`
+exist and never move; later versions get a tag only on the owner's request.
 
 This repository's `.github/workflows/auto-reviewer.yaml`, named `Auto Reviewer`,
-targets `.github/workflows/auto-reviewer-shared.yaml@v0.0.4` with the `validate`
+pins `.github/workflows/auto-reviewer-shared.yaml` the same way, with the `validate`
 CI job. The reusable workflow is named `Auto Reviewer (Shared)`.
 
 Configure Actions secrets in each consumer repository:
@@ -152,7 +153,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.4
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@ab928503b0e21a3e98f7ba34ee9eeb22066cfca8 # v0.0.9
     with:
       required-ci-job: validate
       pr: ${{ inputs.pr || '' }}
@@ -188,7 +189,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.4
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@ab928503b0e21a3e98f7ba34ee9eeb22066cfca8 # v0.0.9
     with:
       required-ci-job: check
       pr: ${{ inputs.pr || '' }}
@@ -224,7 +225,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.6
+    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@ab928503b0e21a3e98f7ba34ee9eeb22066cfca8 # v0.0.9
     with:
       required-ci-jobs: |
         Lint

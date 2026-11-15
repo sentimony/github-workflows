@@ -90,8 +90,9 @@ class ContractTest(unittest.TestCase):
         self.assertNotIn('concurrency', workflow)
         self.assertEqual(set(workflow['jobs']), {'auto_review'})
         job = workflow['jobs']['auto_review']
-        self.assertEqual(job['uses'],
-                         'sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@v0.0.7')
+        self.assertRegex(job['uses'],
+                         r'\Asentimony/github-workflows/\.github/workflows/auto-reviewer-shared\.yaml@[0-9a-f]{40}\Z')
+        self.assertRegex(caller, r'auto-reviewer-shared\.yaml@[0-9a-f]{40} # v\d+\.\d+\.\d+\n')
         self.assertNotIn('concurrency', job)
         self.assertEqual(job['secrets']['AUTO_REVIEWER_YNGWALD'],
                          '${{ secrets.AUTO_REVIEWER_YNGWALD }}')
@@ -181,10 +182,10 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(len(examples), 3)
         for example, expected in zip(examples, (['validate'], ['check'], ['Lint', 'Unit tests'])):
             with self.subTest(expected=expected):
-                tag, secret = (('v0.0.6', 'AUTO_REVIEWER_TOKEN: ${{ secrets.SO_UPSTARS_PR_TOKEN }}')
-                               if 'Unit tests' in expected else
-                               ('v0.0.4', 'AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}'))
-                self.assertIn(f'uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@{tag}\n', example + '\n')
+                secret = ('AUTO_REVIEWER_TOKEN: ${{ secrets.SO_UPSTARS_PR_TOKEN }}'
+                          if 'Unit tests' in expected else
+                          'AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}')
+                self.assertRegex(example + '\n', r'uses: sentimony/github-workflows/\.github/workflows/auto-reviewer-shared\.yaml@[0-9a-f]{40} # v\d+\.\d+\.\d+\n')
                 self.assertIn(secret + '\n', example + '\n')
                 result = self.check(caller=example, expected=expected)
                 self.assertEqual(result.returncode, 0, result.stderr)

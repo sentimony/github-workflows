@@ -9,10 +9,16 @@ The reusable engine is `.github/workflows/auto-reviewer-shared.yaml`, named
 `Auto Reviewer (Shared)`. The reviewer writes the internal draft footer with separate
 workflow/ref spans and a Next step line; the review job rewrites those closing lines
 deterministically (dropping any model-written ones), trusted publish validates them and renders the
-public comment. The public body shows `Readiness: **Ready**` (or the other validated
-readiness), the verdict table, one collapsed Details block, and a `Used:` footer.
+public comment. The public body shows the heading `## Readiness: Ready` (or the other
+validated readiness), the verdict table, one collapsed Details block, and a `Used:` footer.
+Headings are shared with the merged summary: `##` titles the comment, `###` is a visible
+section, `####` a section inside Details. Completion and history readers also accept the
+earlier public line `Readiness: **Ready**`.
 That footer links superscript skill/workflow versions, groups model and effort in one
-code span, and retains measured duration, tokens and cost without a Next step line.
+code span, and retains the durations, tokens and cost without a Next step line: `ci` is
+the time from the start of the triggering CI run (of this run for other events) to the
+publication, `model` the measured agent step; without a readable start the agent step
+stands alone, unlabelled. The ledger's `duration_seconds` stays the agent step.
 For a caller pinned to a full commit SHA the workflow link reads `# vX.Y.Z` (the comment
 of the caller's `uses:` line, read from the caller file at the running commit and accepted
 only when the newest `CHANGELOG.md` heading at the pinned commit names the same version)

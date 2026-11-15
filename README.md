@@ -24,9 +24,19 @@ The `skl-x` version moves with each release; the skill itself comes from the new
 `vX.Y.Z` tag of `sentimony/agentic-workflow` or the `REVIEW_SKILLS_REF` commit, must
 install as a plain directory without symbolic links, and must name its version.
 
-Published comments show readiness first, then the verdict table, a collapsed Details
-block, and a Used footer. The footer links skill and workflow versions in superscript,
-groups model and effort, and shows measured duration, tokens and cost. The workflow
+Published comments show readiness first, as the comment's heading, then the verdict
+table, a collapsed Details block, and a Used footer. Both comment kinds share one heading
+rule: `##` titles the comment (`## Readiness: Ready with fixes`, `## Review cycle summary`),
+`###` is a visible section (`### Review usage`), `####` a section inside Details.
+
+The footer links skill and workflow versions in superscript, groups model and effort, and
+shows two durations, tokens and cost: `ci` is the whole path, from the start of the CI run
+that triggered the review (of the reviewer run itself for a review request or a dispatch)
+to the publication; `model` is the agent step alone. When the start cannot be read, the
+footer shows the agent step without a label, as before. The merged summary lists each
+review with its model and effort in one code span and both durations (`CI time`,
+`Model time`) in code spans, an unmeasured value as plain `unknown`, and a bold Total row;
+reviews published before `v0.0.15` have no `CI time`. The workflow
 version reads `# vX.Y.Z`, linked to the commit that ran (`#` marks a version tied to a
 commit). For a caller on a branch such as `@stable` it is the newest `CHANGELOG.md` heading
 at the commit the branch resolved to for that run; when it cannot be read, the footer shows

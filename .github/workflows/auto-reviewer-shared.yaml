@@ -1776,7 +1776,8 @@ jobs:
           # A pinned commit shows the version its caller names, a branch the version at the commit it
           # resolved to: `#` marks a version tied to a commit, the link its SHA.
           workflow_version = os.environ.get('WORKFLOW_VERSION', '')
-          workflow_sha = ref if re.fullmatch(r'[0-9a-f]{40}', ref) else os.environ.get('WORKFLOW_SHA', '')
+          # The review job outputs a commit only for a branch, also one named like a commit.
+          workflow_sha = os.environ.get('WORKFLOW_SHA', '') or ref
           workflow_link = f'[{ref}](https://github.com/sentimony/github-workflows)'
           if re.fullmatch(r'[0-9a-f]{40}', workflow_sha) and re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', workflow_version):
               workflow_link = f'[# {workflow_version}](https://github.com/sentimony/github-workflows/commit/{workflow_sha})'

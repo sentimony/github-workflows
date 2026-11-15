@@ -1118,9 +1118,10 @@ class PublicPresentationTest(unittest.TestCase):
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertIn('<sup>[stable](https://github.com/sentimony/github-workflows)</sup>',body)
                 self.assertNotIn('# v',body)
-        # A commit pin links its own SHA, whatever WORKFLOW_SHA says.
-        result,body,_,_=self.render(ref=sha,workflow_version='v0.0.9',workflow_sha='c'*40)
-        self.assertIn('[# v0.0.9](https://github.com/sentimony/github-workflows/commit/'+sha+')',body)
+        # A branch named like a commit links the commit it resolved to, not its own name.
+        result,body,_,_=self.render(ref='c'*40,workflow_version='v0.0.15',workflow_sha=sha)
+        self.assertIn('[# v0.0.15](https://github.com/sentimony/github-workflows/commit/'+sha+')',body)
+        self.assertNotIn('c'*40,body)
 
 
 class FooterTest(unittest.TestCase):

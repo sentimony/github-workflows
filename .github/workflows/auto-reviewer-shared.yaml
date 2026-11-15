@@ -2156,6 +2156,7 @@ jobs:
       HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
       REVIEW_ID: ${{ needs.publish.outputs.review_id }}
       REQUESTS: ${{ needs.publish.outputs.requests }}
+      REVIEWER: ${{ inputs.reviewer }}
     steps:
       - name: Resolve verified thread metadata
         run: |

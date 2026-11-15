@@ -105,7 +105,8 @@ Configure Actions secrets in each consumer repository:
    and Pull requests and Issues set to Read and write. It creates a request the org owner
    approves at `github.com/organizations/sentimony/settings/personal-access-token-requests`.
    Copy the value with "Copy token", not from a screenshot, and check that `gh api user`
-   returns `yngwald` with it.
+   returns `yngwald` with it. A private repository of a personal account cannot take a
+   fine-grained PAT of another user; give `yngwald` a classic PAT with `repo` scope there.
 2. Create `AUTO_REVIEWER_YNGWALD` and `CLAUDE_CODE_OAUTH_TOKEN`, with separate token
    values for each repository.
 3. Update the caller to read `secrets.AUTO_REVIEWER_YNGWALD`, as shown below.

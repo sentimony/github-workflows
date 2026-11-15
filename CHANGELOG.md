@@ -3,6 +3,14 @@
 One version covers every workflow in this repository. Each version lists its changes
 per workflow, newest first. Callers pin the full SHA of the version's commit in `main`.
 
+## v0.0.14 - 2026-11-15
+
+### auto-reviewer
+
+1. The repository's own caller and the README caller examples pin the `v0.0.13` commit
+   (`@d431253a764823c2414bf51e496b8a8c65adef78 # v0.0.13`). The reusable workflow is
+   unchanged.
+
 ## v0.0.13 - 2026-11-15
 
 ### auto-reviewer-shared

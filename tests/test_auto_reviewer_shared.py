@@ -979,7 +979,7 @@ USED_EXAMPLE = 'Used: `cr-request` <sup>[0.0.16](https://www.skills.sh/sentimony
 
 
 class PublicPresentationTest(unittest.TestCase):
-    def render(self, readiness='Ready', ref='v0.0.4', usage=True, reversed_footer=False, details='<details open><summary>Details</summary>', full=False, evidence='Full evidence.', extra_before='', extra_after='', row='| PASS | PASS | PASS | 0 | 0 | 0 |'):
+    def render(self, readiness='Ready', ref='v0.0.4', usage=True, reversed_footer=False, details='<details open><summary>Details</summary>', full=False, evidence='Full evidence.', extra_before='', extra_after='', row='| PASS | PASS | PASS | 0 | 0 | 0 |', workflow_version=None):
         signature=f'Reviewed with: `auto-reviewer-shared.yaml` `{ref}` workflow · `cr-request` `v0.0.16` skill · In `0 min 49 sec`'
         if usage:
             signature+=' · `claude-sonnet-5-5` `medium` · `202,629 tokens` · `$0.1634`'
@@ -994,6 +994,8 @@ class PublicPresentationTest(unittest.TestCase):
             root=Path(tmp);(root/'draft').write_text(body)
             env={**os.environ,'BODY_FILE':str(root/'draft'),'POST_FILE':str(root/'post'),'SIGNATURE':signature,'INTERNAL_SIGNATURE':signature,
                  'LAST_LINE':footer[-1]}
+            env.pop('WORKFLOW_VERSION',None)
+            if workflow_version is not None: env['WORKFLOW_VERSION']=workflow_version
             if full:
                 fake=root/'gh'
                 fake.write_text('#!/bin/sh\ncase "$2" in\n  */status[?]*) echo run-url ;;\n  */pulls/42) echo '+('a'*40)+' ;;\n'
@@ -1081,6 +1083,24 @@ class PublicPresentationTest(unittest.TestCase):
                 self.assertTrue(body.rstrip().endswith(' · `0 min 49 sec`'))
                 self.assertNotIn('tokens',body)
                 self.assertNotIn('Next step:',body)
+
+    def test_pinned_commit_shows_the_caller_version(self):
+        sha='ab928503b0e21a3e98f7ba34ee9eeb22066cfca8'
+        pinned='`auto-reviewer-shared` <sup>[# v0.0.9](https://github.com/sentimony/github-workflows/commit/'+sha+')</sup>'
+        for full in (False, True):
+            with self.subTest(full=full):
+                result,body,_,_=self.render(ref=sha,workflow_version='v0.0.9',full=full)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn(' · '+pinned+' · `claude-sonnet-5-5 medium` · ',body)
+                self.assertNotIn('['+sha+']',body)
+        # The version needs a commit pin and the vX.Y.Z form; anything else keeps the ref.
+        for ref,version in ((sha,''),(sha,'0.0.9'),(sha,'v0.0.9](x'),('v0.0.4','v0.0.9'),('main','v0.0.9')):
+            with self.subTest(ref=ref,version=version):
+                result,body,_,_=self.render(ref=ref,workflow_version=version)
+                self.assertEqual(result.returncode,0,result.stderr)
+                shown=ref[1:] if ref=='v0.0.4' else ref
+                self.assertIn('<sup>['+shown+'](https://github.com/sentimony/github-workflows)</sup>',body)
+                self.assertNotIn('# v',body)
 
 
 class FooterTest(unittest.TestCase):
@@ -1225,6 +1245,62 @@ class WorkflowIdentityTest(unittest.TestCase):
                 result=subprocess.run(['bash','-eo','pipefail','-c',step('Resolve workflow identity')],env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertEqual(output.read_text(),'identity=auto-reviewer-shared.yaml@'+expected+'\nref='+expected+'\n')
+
+    def pinned(self, caller, ref='b'*40, caller_ref='owner/repo/.github/workflows/auto-reviewer.yaml@refs/heads/main',
+               caller_sha='c'*40, gh_rc=0, changelog='# Changelog\n\nIntro.\n\n## v0.0.9 - 2026-11-15\n\n## v0.0.8\n', changelog_rc=0):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); output=root/'output'; (root/'caller').write_text(caller); (root/'changelog').write_text(changelog)
+            fake=root/'gh'
+            fake.write_text('#!/bin/sh\necho "$*" >> '+str(root/'calls')+'\ncase "$*" in\n'
+                            '  *repos/sentimony/github-workflows/contents/CHANGELOG.md[?]ref=*) [ '+str(changelog_rc)+' -eq 0 ] || exit '+str(changelog_rc)+'; cat '+str(root/'changelog')+' ;;\n'
+                            '  *) [ '+str(gh_rc)+' -eq 0 ] || exit '+str(gh_rc)+'; cat '+str(root/'caller')+' ;;\nesac\n')
+            fake.chmod(0o755)
+            env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'GITHUB_OUTPUT':str(output),
+                 'WORKFLOW_REF':'sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@'+ref,
+                 'CALLER_WORKFLOW_REF':caller_ref,'CALLER_WORKFLOW_SHA':caller_sha,'GH_TOKEN':'token'}
+            result=subprocess.run(['bash','-eo','pipefail','-c',step('Resolve workflow identity')],env=env,capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            calls=(root/'calls').read_text() if (root/'calls').exists() else ''
+            return output.read_text(),calls
+
+    def test_pinned_commit_takes_the_version_from_the_caller_comment(self):
+        uses='    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@'
+        base='identity=auto-reviewer-shared.yaml@'+'b'*40+'\nref='+'b'*40+'\n'
+        output,calls=self.pinned('jobs:\n  auto_review:\n'+uses+'b'*40+' # v0.0.9\n    with:\n      pr: 1\n')
+        self.assertEqual(output,base+'version=v0.0.9\n')
+        self.assertIn('repos/owner/repo/contents/.github/workflows/auto-reviewer.yaml?ref='+'c'*40,calls)
+        self.assertIn('repos/sentimony/github-workflows/contents/CHANGELOG.md?ref='+'b'*40,calls)
+        for name,caller in [('no comment',uses+'b'*40+'\n'),('another commit',uses+'d'*40+' # v0.0.9\n'),
+                            ('not a version',uses+'b'*40+' # latest\n'),('trailing text',uses+'b'*40+' # v0.0.9 beta\n'),
+                            ('two versions',uses+'b'*40+' # v0.0.9\n'+uses+'b'*40+' # v0.0.8\n'),
+                            ('commented out','#'+uses+'b'*40+' # v0.0.9\n')]:
+            with self.subTest(name=name):
+                self.assertEqual(self.pinned(caller)[0],base)
+        with self.subTest(name='unreadable caller'):
+            self.assertEqual(self.pinned(uses+'b'*40+' # v0.0.9\n',gh_rc=1)[0],base)
+
+    def test_caller_version_must_match_the_changelog_at_the_pinned_commit(self):
+        caller='    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@'+'b'*40+' # v0.0.9\n'
+        base='identity=auto-reviewer-shared.yaml@'+'b'*40+'\nref='+'b'*40+'\n'
+        self.assertEqual(self.pinned(caller,changelog='## v0.0.9\n\n## v0.0.8 - 2026-11-15\n')[0],base+'version=v0.0.9\n')
+        for name,kwargs in [('newer commit',{'changelog':'## v0.0.10 - 2026-11-15\n\n## v0.0.9 - 2026-11-15\n'}),
+                            ('older commit',{'changelog':'## v0.0.8 - 2026-11-15\n'}),
+                            ('no version heading',{'changelog':'# Changelog\n\n## Unreleased\n'}),
+                            ('unreadable changelog',{'changelog_rc':1})]:
+            with self.subTest(name=name):
+                self.assertEqual(self.pinned(caller,**kwargs)[0],base)
+
+    def test_version_lookup_needs_a_commit_pin_and_a_safe_caller(self):
+        uses='    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@'
+        for name,kwargs in [('tag pin',{'ref':'refs/tags/v0.0.9'}),('no caller sha',{'caller_sha':''}),
+                            ('caller outside workflows',{'caller_ref':'owner/repo/other/file.yaml@refs/heads/main'}),
+                            ('unsafe caller path',{'caller_ref':'owner/repo/.github/workflows/../x.yaml@refs/heads/main'}),
+                            ('no caller',{'caller_ref':''})]:
+            with self.subTest(name=name):
+                ref=kwargs.get('ref','b'*40)
+                output,calls=self.pinned(uses+ref+' # v0.0.9\n',**kwargs)
+                self.assertNotIn('version=',output)
+                self.assertEqual(calls,'')
 
     def test_missing_or_unsafe_identity_fails_without_inventing_a_version(self):
         for ref in ['owner/repo/.github/workflows/auto-reviewer.yaml@v0.0.3', '', 'owner/repo/.github/workflows/caller.yaml@refs/tags/v0.0.3',
@@ -1954,7 +2030,7 @@ sys.exit(2)
         call=triggers['workflow_call']
         defaults={'required-ci-job':'','required-ci-jobs':'','skippable-ci-jobs':'','pr':'',
                   'ci-events':'push,workflow_dispatch','ci-workflow':'ci.yml','reviewer':'yngwald',
-                  'review-changed-head':False}
+                  'review-changed-head':True}
         self.assertEqual(set(call['inputs']), set(defaults))
         for name, default in defaults.items():
             self.assertEqual(call['inputs'][name]['type'], 'boolean' if name=='review-changed-head' else 'string')
@@ -2112,6 +2188,18 @@ class SummaryRunTest(unittest.TestCase):
         self.assertIn('| 1 | claude-sonnet-5-5 | medium | 49 sec | 202,629 | $0.16 |',body)
         self.assertIn('| **Total** | | | **49 sec** | **202,629** | **$0.16** |',body)
         self.assertIn('| Measured | | | 2/2 | 2/2 | 2/2 |',body)
+
+    def test_pinned_commit_used_footer_feeds_summary_usage(self):
+        pinned=USED_EXAMPLE.replace('[0.0.4](https://github.com/sentimony/github-workflows)',
+                                    '[# v0.0.13](https://github.com/sentimony/github-workflows/commit/'+'b'*40+')')
+        self.assertNotEqual(pinned,USED_EXAMPLE)
+        reviews=[self.with_signature({'id':n,'user':{'login':'so-upstars'},'body':''},line)
+                 for n,line in enumerate((pinned,pinned.split(' · `claude-sonnet-5-5 medium`',1)[0]+' · `0 min 7 sec`'),101)]
+        state,_=self.run_summary({'reviews':reviews})
+        body=state['comments'][0]['body']
+        self.assertIn('| 1 | claude-sonnet-5-5 | medium | 49 sec | 202,629 | $0.16 |',body)
+        self.assertIn('| 2 | unknown | unknown | 7 sec | unknown | unknown |',body)
+        self.assertIn('| Measured | | | 2/2 | 1/2 | 1/2 |',body)
 
     def test_summary_is_a_table_with_per_review_usage(self):
         base='Reviewed with: `/cr-request` 0.0.11 skill · In 0 min 20 sec'

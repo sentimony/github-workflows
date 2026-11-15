@@ -3,6 +3,20 @@
 One version covers every workflow in this repository. Each version lists its changes
 per workflow, newest first. Callers pin the full SHA of the version's commit in `main`.
 
+## v0.0.13 - 2026-11-15
+
+### auto-reviewer-shared
+
+1. `review-changed-head` defaults to `true`: after a clean review a new head is reviewed
+   again when the PR's own diff changed. A merge of the base branch alone is still
+   skipped; a caller restores the earlier behavior with `review-changed-head: false`.
+2. The Used footer of a caller pinned to a commit shows `# vX.Y.Z` in place of the SHA:
+   the version comment of the caller's `uses:` line, linked to the pinned commit. The
+   review job reads the caller file at the running commit and accepts the comment only
+   when the newest `CHANGELOG.md` heading at the pinned commit names the same version; a
+   missing or malformed comment, a mismatch, a tag or branch pin, or a failed read keeps
+   the ref. Summaries read both forms of the footer.
+
 ## v0.0.12 - 2026-11-15
 
 ### Tests

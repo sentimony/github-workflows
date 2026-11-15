@@ -10,7 +10,7 @@
    (`auto_reviewer_lib`), not in copies. Every inline `python3` in it runs as
    `python3 -I`.
 2. `.github/workflows/auto-reviewer.yaml` - this repository's own caller, pinned to the
-   last released tag.
+   full SHA of a released commit with a `# vX.Y.Z` comment.
 3. `.github/workflows/ci.yml` - the `validate` job: the unit tests and a pinned actionlint.
    `.github/workflows/skl-x-live.yml` runs `tests/test_skl_x_live.py` with
    `AUTO_REVIEWER_LIVE=1` (weekly, on dispatch and on PRs that change the install step):
@@ -20,8 +20,8 @@
    (Ruby 3 or later).
 5. `tests/` - `step(name)` in `tests/test_auto_reviewer_shared.py` runs a step's real
    `run` script with fake `gh`, `npx` and `git`; test a new script step through it, not
-   through a copy. The README must keep exactly two `yaml` caller examples on the released
-   tag: a test checks them against the contract.
+   through a copy. The README must keep exactly three `yaml` caller examples pinned as
+   `@<sha> # vX.Y.Z`: a test checks them against the contract.
 6. `AUTO_REVIEWER_SHARED_TRANSPORT.md` holds the draft, ledger and host actions contract;
    `README.md` the public contract and callers.
 
@@ -35,12 +35,14 @@ against `.github/workflows/auto-reviewer.yaml` with `--required-ci-job validate`
 
 1. Branches are `YYMMDDHHMM-dev-session`; PRs are squash-merged, and the PR title becomes
    the commit title. Merging and tagging happen only on the owner's explicit request.
-2. Record every change in `CHANGELOG.md` under the next patch tag's `## vX.Y.Z` heading;
-   the date is added when tagging. Versions take patch bumps. A release tag goes on the
-   merged commit in `main`, is pushed to origin and checked to resolve; tags never move.
+2. Record every change in `CHANGELOG.md` under the next `## vX.Y.Z - YYYY-MM-DD` heading;
+   versions take patch bumps. A version is released when its PR is merged: callers pin the
+   full SHA of that commit in `main` with the version in a comment (`@<sha> # vX.Y.Z`), as
+   third-party actions are pinned. No tag is needed; one goes on only at the owner's
+   request, and tags never move.
 3. A PR that changes the reusable workflow leaves the own caller on the previous released
-   tag, so the released version reviews and summarizes it. Move the caller to the new tag
-   in a separate PR after tagging.
+   commit, so the released version reviews and summarizes it. Move the caller to the new
+   commit in a separate PR after the merge.
 4. The Auto Reviewer format (footer, ledger, transport) belongs to this repository. The
    `cr-request` skill stays independent of its callers: put caller-specific rules in the
    workflow prompt or the transport contract, not in the skill.

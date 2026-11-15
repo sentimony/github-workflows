@@ -60,6 +60,22 @@ def validate_type(value, kind):
     return False
 
 
+JOB_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9 _.,()/-]*')
+REVIEWER_SECRETS = ('AUTO_REVIEWER_TOKEN', 'AUTO_REVIEWER_YNGWALD')
+
+
+def job_names(*values):
+    # Same split as the gate: a value with a newline splits on newlines only, else on commas.
+    names = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        value = value.replace('\r', '')
+        parts = value.split('\n') if '\n' in value else value.split(',')
+        names.extend(part.strip() for part in parts if part.strip())
+    return names
+
+
 def check(central, caller, expected):
     events = mapping(central.get('on', central.get('true')), 'missing workflow_call')
     call = mapping(events.get('workflow_call'), 'missing workflow_call')
@@ -87,8 +103,15 @@ def check(central, caller, expected):
         spec = mapping(spec, 'invalid secret schema')
         require(not spec.get('required', False) or name in bindings, 'missing required secret')
     require(all(isinstance(v, str) and v for v in bindings.values()), 'invalid secret binding')
-    require(values.get('required-ci-job') == expected, 'incorrect required CI job')
-    require(re.fullmatch(r'[A-Za-z_][A-Za-z0-9_-]*', expected) is not None, 'invalid CI job')
+    if all(name in secrets for name in REVIEWER_SECRETS):
+        require(any(name in bindings for name in REVIEWER_SECRETS),
+                'missing required secret: bind AUTO_REVIEWER_TOKEN or AUTO_REVIEWER_YNGWALD')
+    names = job_names(values.get('required-ci-job'), values.get('required-ci-jobs'))
+    require(bool(names), 'missing required CI job')
+    for name in expected:
+        require(name in names, 'incorrect required CI job')
+        require(JOB_NAME.fullmatch(name) is not None, 'invalid CI job')
+    require(all(JOB_NAME.fullmatch(name) for name in names), 'invalid CI job')
     ceiling = permissions(job.get('permissions', caller.get('permissions')))
     defaults = central.get('permissions', {})
     callee_jobs = mapping(central.get('jobs'), 'missing callee jobs')
@@ -106,7 +129,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--workflow', required=True)
     parser.add_argument('--caller', required=True)
-    parser.add_argument('--required-ci-job', required=True, choices=('validate', 'check'))
+    parser.add_argument('--required-ci-job', required=True, action='append',
+                        help='CI job the caller must require; repeat for several')
     args = parser.parse_args()
     try:
         check(load(args.workflow), load(args.caller), args.required_ci_job)

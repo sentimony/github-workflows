@@ -44,7 +44,7 @@ on:
         description: Also review a new head when the PR's own diff changed since the last reviewed head
         required: false
         type: boolean
-        default: false
+        default: true
       pr:
         description: PR number
         required: false
@@ -214,7 +214,7 @@ jobs:
           # Footer patterns of published reviews: the Reviewed with signature and the Used line.
           reviewed_with=r'^Reviewed with: (?:(?:`auto-reviewer(?:-shared)?\.yaml@[A-Za-z0-9][A-Za-z0-9._/-]*`|`auto-reviewer(?:-shared)?\.yaml` `[A-Za-z0-9][A-Za-z0-9._/-]*`) workflow · )?(?:`cr-request@v[0-9.]+`|`cr-request` `v[0-9.]+`|`/cr-request` [^\n]+) skill · In `?'
           reviewed_duration_re=re.compile(reviewed_with+r'([0-9]+) min ([0-9]+) sec`?(?: · .*)?$',re.M)
-          used_duration_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[[A-Za-z0-9][A-Za-z0-9._/-]*\]\(https://github\.com/sentimony/github-workflows\)</sup> · (?:`[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])? (?:low|medium|high)` · )?`([0-9]+) min ([0-9]+) sec`(?: · .*)?$',re.M)
+          used_duration_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[(?:[A-Za-z0-9][A-Za-z0-9._/-]*|# v[0-9]+\.[0-9]+\.[0-9]+)\]\(https://github\.com/sentimony/github-workflows(?:/commit/[0-9a-f]{40})?\)</sup> · (?:`[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])? (?:low|medium|high)` · )?`([0-9]+) min ([0-9]+) sec`(?: · .*)?$',re.M)
           disposition_re=re.compile(r'<!--\s*cr-received-disposition:v1\s+(\{.*?\})\s*-->',re.S)
           repo=number=reviewer=prefix=None
 
@@ -322,7 +322,7 @@ jobs:
               all_threads=threads()
               valid=[]; unknown=False; review_durations=[]; usages=[]
               usage_re=re.compile(reviewed_with+r'[0-9]+ min [0-9]+ sec`?(?: · `?([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?)`? `?(low|medium|high)`? · `?([0-9]+(?:,[0-9]{3})*) tokens`? · `?\$([0-9]+\.[0-9]{4})`?)?$',re.M)
-              used_usage_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[[A-Za-z0-9][A-Za-z0-9._/-]*\]\(https://github\.com/sentimony/github-workflows\)</sup> · `([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)` · `[0-9]+ min [0-9]+ sec` · `([0-9]+(?:,[0-9]{3})*) tokens` · `\$([0-9]+\.[0-9]{4})`$',re.M)
+              used_usage_re=re.compile(r'^Used: `cr-request` <sup>\[[0-9.]+\]\(https://www\.skills\.sh/sentimony/agentic-workflow/cr-request\)</sup> · `auto-reviewer-shared` <sup>\[(?:[A-Za-z0-9][A-Za-z0-9._/-]*|# v[0-9]+\.[0-9]+\.[0-9]+)\]\(https://github\.com/sentimony/github-workflows(?:/commit/[0-9a-f]{40})?\)</sup> · `([a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?) (low|medium|high)` · `[0-9]+ min [0-9]+ sec` · `([0-9]+(?:,[0-9]{3})*) tokens` · `\$([0-9]+\.[0-9]{4})`$',re.M)
               for r in reviews:
                   review_durations.append(None)
                   found_usage=usage_re.findall(r.get('body') or '') + used_usage_re.findall(r.get('body') or '')
@@ -742,9 +742,10 @@ jobs:
               blocking=$(( blocking + prior_blocking ))
               [ "$last_sha" != "$head_sha" ] || skip_final "PR #$number already has a review of $head_sha"
               if [ "$blocking" -eq 0 ]; then
-                # Opt-in: a clean review still gives way to a new head when the PR's own diff (base...head)
-                # changed since the last reviewed head. A merge of the base branch leaves it unchanged.
-                if [ "${REVIEW_CHANGED_HEAD:-false}" != true ]; then
+                # Unless the caller opts out: a clean review still gives way to a new head when the PR's
+                # own diff (base...head) changed since the last reviewed head. A merge of the base branch
+                # leaves it unchanged.
+                if [ "${REVIEW_CHANGED_HEAD:-true}" != true ]; then
                   skip_final "the latest review of PR #$number has no Critical or Important findings"
                 fi
                 if [ -z "$base_sha" ] || ! old_id=$(own_diff_id "$base_sha" "$last_sha") \
@@ -795,6 +796,7 @@ jobs:
     outputs:
       version: ${{ steps.skill.outputs.version }}
       workflow_identity: ${{ steps.workflow_identity.outputs.identity }}
+      workflow_version: ${{ steps.workflow_identity.outputs.version }}
       threads_digest: ${{ steps.threads.outputs.digest }}
     env:
       NUMBER: ${{ needs.gate.outputs.number }}
@@ -1003,14 +1005,21 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # job.workflow_ref identifies this reusable workflow, while github.workflow_ref identifies its caller.
+      # A caller that pins a full commit SHA names the version in a comment (`@<sha> # vX.Y.Z`); the
+      # Used footer shows that comment. It is the caller's claim, read from the caller file at the
+      # commit that runs, so it counts only when the newest CHANGELOG.md heading of this repository
+      # at the pinned commit names the same version. A mismatch or a failed read leaves the SHA.
       - name: Resolve workflow identity
         id: workflow_identity
         env:
           # JSON round-trip supports the new job property with older actionlint context schemas.
           WORKFLOW_REF: ${{ fromJSON(toJSON(job)).workflow_ref }}
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 -I - <<'PYCODE'
-          import os, re, sys
+          import os, re, subprocess, sys
           source, separator, ref = os.environ['WORKFLOW_REF'].rpartition('@')
           for prefix in ('refs/tags/', 'refs/heads/'):
               if ref.startswith(prefix):
@@ -1019,9 +1028,45 @@ jobs:
           if (not separator or source.rsplit('/', 1)[-1] != 'auto-reviewer-shared.yaml'
                   or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]{0,255}', ref)):
               sys.exit('Cannot determine a safe reusable workflow identity')
+          def pinned_version():
+              caller, _, _ = os.environ.get('CALLER_WORKFLOW_REF', '').rpartition('@')
+              parts = caller.split('/', 2)
+              sha = os.environ.get('CALLER_WORKFLOW_SHA', '')
+              if (not re.fullmatch(r'[0-9a-f]{40}', ref) or not re.fullmatch(r'[0-9a-f]{40}', sha)
+                      or len(parts) != 3 or not re.fullmatch(r'\.github/workflows/[A-Za-z0-9._-]+\.ya?ml', parts[2])
+                      or not all(re.fullmatch(r'[A-Za-z0-9._-]+', part) for part in parts[:2])):
+                  return None
+              callee = source.split('/', 2)
+              if len(callee) != 3 or not all(re.fullmatch(r'[A-Za-z0-9._-]+', part) for part in callee[:2]):
+                  return None
+              def fetch(owner, repo, path, at):
+                  return subprocess.run(
+                      ['gh', 'api', '-H', 'Accept: application/vnd.github.raw',
+                       f'repos/{owner}/{repo}/contents/{path}?ref={at}'],
+                      check=True, capture_output=True, text=True, timeout=60).stdout.splitlines()
+              try:
+                  caller_lines = fetch(parts[0], parts[1], parts[2], sha)
+                  pin = re.compile(r'[ \t]*uses:[ \t]*' + re.escape(source + '@' + ref)
+                                   + r'[ \t]+#[ \t]*(v[0-9]+\.[0-9]+\.[0-9]+)[ \t]*')
+                  versions = {match.group(1) for match in map(pin.fullmatch, caller_lines) if match}
+                  if len(versions) != 1:
+                      return None
+                  heading = re.compile(r'## (v[0-9]+\.[0-9]+\.[0-9]+)(?: - .*)?')
+                  released = next((match.group(1) for match in
+                                   map(heading.fullmatch, fetch(callee[0], callee[1], 'CHANGELOG.md', ref)) if match), None)
+              except (OSError, subprocess.SubprocessError):
+                  return None
+              claimed = versions.pop()
+              if claimed != released:
+                  print(f'::warning::The caller names {claimed} for {ref}, the changelog there says {released}')
+                  return None
+              return claimed
+          version = pinned_version()
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
               output.write('identity=auto-reviewer-shared.yaml@' + ref + '\n')
               output.write('ref=' + ref + '\n')
+              if version:
+                  output.write('version=' + version + '\n')
           PYCODE
 
       # The duration in the signature line covers the agent step only, from here to the step after it.
@@ -1576,6 +1621,7 @@ jobs:
           REVIEW_RESULT: ${{ needs.review.result }}
           VERSION: ${{ needs.review.outputs.version }}
           WORKFLOW_IDENTITY: ${{ needs.review.outputs.workflow_identity }}
+          WORKFLOW_VERSION: ${{ needs.review.outputs.workflow_version }}
         run: |
           post_status() {
             gh api "repos/$REPO/statuses/$HEAD_SHA" -f state="$1" -f description="$2" \
@@ -1707,8 +1753,13 @@ jobs:
           ref, version, duration, model, effort, tokens, cost = footer.groups()
           if re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9._-]+)?', ref):
               ref = ref[1:]
+          # A pinned commit shows the version its caller names: `#` marks a commit pin, the link its SHA.
+          workflow_version = os.environ.get('WORKFLOW_VERSION', '')
+          workflow_link = f'[{ref}](https://github.com/sentimony/github-workflows)'
+          if re.fullmatch(r'[0-9a-f]{40}', ref) and re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', workflow_version):
+              workflow_link = f'[# {workflow_version}](https://github.com/sentimony/github-workflows/commit/{ref})'
           used = (f'Used: `cr-request` <sup>[{version}](https://www.skills.sh/sentimony/agentic-workflow/cr-request)</sup>'
-                  f' · `auto-reviewer-shared` <sup>[{ref}](https://github.com/sentimony/github-workflows)</sup>')
+                  f' · `auto-reviewer-shared` <sup>{workflow_link}</sup>')
           if model is not None:
               used += f' · `{model} {effort}`'
           used += f' · `{duration}`'

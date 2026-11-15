@@ -13,8 +13,13 @@ public comment. The public body shows `Readiness: **Ready**` (or the other valid
 readiness), the verdict table, one collapsed Details block, and a `Used:` footer.
 That footer links superscript skill/workflow versions, groups model and effort in one
 code span, and retains measured duration, tokens and cost without a Next step line.
-History readers accept both the new Used footer and released split, combined and
-skill-only footers. The ledger marker and schema remain unchanged.
+For a caller pinned to a full commit SHA the workflow link reads `# vX.Y.Z` (the comment
+of the caller's `uses:` line, read from the caller file at the running commit and accepted
+only when the newest `CHANGELOG.md` heading at the pinned commit names the same version)
+and points to the pinned commit; other refs, a missing comment and a mismatch keep the ref
+as the link text.
+History readers accept both forms of the Used footer and the released split, combined
+and skill-only footers. The ledger marker and schema remain unchanged.
 
 Manual workflow dispatch accepts only `pr`. The `pr_number` field below belongs to
 the JSON transport and ledger schema and remains required.

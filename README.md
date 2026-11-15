@@ -26,7 +26,11 @@ install as a plain directory without symbolic links, and must name its version.
 
 Published comments show readiness first, then the verdict table, a collapsed Details
 block, and a Used footer. The footer links skill and workflow versions in superscript,
-groups model and effort, and shows measured duration, tokens and cost. The public
+groups model and effort, and shows measured duration, tokens and cost. For a caller
+pinned to a commit the workflow version reads `# vX.Y.Z`: the comment of the caller's
+`uses:` line, linked to the pinned commit (`#` marks a commit pin). The comment counts
+only when the newest `CHANGELOG.md` heading at that commit names the same version;
+without the comment, or on a mismatch, the footer shows the SHA. The public
 comment omits Next step; the reviewer's internal draft retains its validated contract. The
 workflow itself appends the draft's signature and, when the model's is missing or invalid,
 the Next step line, closes an unclosed Details block, and, when the draft still fails its
@@ -48,13 +52,14 @@ History and cycle summaries continue to read earlier review formats.
 3. `reviewer` is the login of the account that owns the reviewer token (default
    `yngwald`). It posts the review, owns the ledger threads and summary, and is the account
    a review request must name. The workflow fails when the token belongs to someone else.
-4. `review-changed-head` (boolean, default `false`). By default a new head is reviewed
-   automatically only when the previous review left unresolved Critical or Important
-   findings. When `true`, a new head is also reviewed after a clean review if the PR's own
-   diff (`base...head`, compared by stable patch ID) changed since the last reviewed head;
-   an identical diff, such as a clean merge of the base branch, is skipped with that
-   reason. The round limit applies either way. If the diffs cannot be fetched or compared,
-   the new head is reviewed.
+4. `review-changed-head` (boolean, default `true`). A new head is reviewed automatically
+   when the previous review left unresolved Critical or Important findings, and also after
+   a clean review if the PR's own diff (`base...head`, compared by stable patch ID) changed
+   since the last reviewed head; an identical diff, such as a clean merge of the base
+   branch, is skipped with that reason. The round limit applies either way. If the diffs
+   cannot be fetched or compared, the new head is reviewed. Set `false` to review a new
+   head only after unresolved Critical or Important findings. A review request that names
+   the reviewer always gets a review of the current head.
 5. `pr` is the optional PR-number string, with an empty default for manual dispatch.
 6. Secrets: `CLAUDE_CODE_OAUTH_TOKEN` is required. The reviewer PAT comes from
    `AUTO_REVIEWER_TOKEN`, or from `AUTO_REVIEWER_YNGWALD` when the former is empty; both

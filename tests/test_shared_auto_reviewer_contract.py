@@ -4,11 +4,11 @@ import subprocess
 import tempfile
 import unittest
 
-from scripts.check_auto_reviewer_shared_contract import load
+from scripts.check_shared_auto_reviewer_contract import load
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECKER = ROOT / 'scripts/check_auto_reviewer_shared_contract.py'
-WORKFLOW = ROOT / '.github/workflows/auto-reviewer-shared.yaml'
+CHECKER = ROOT / 'scripts/check_shared_auto_reviewer_contract.py'
+WORKFLOW = ROOT / '.github/workflows/shared-auto-reviewer.yaml'
 CALLER = '''name: Auto Reviewer
 on: [workflow_dispatch]
 permissions:
@@ -90,8 +90,10 @@ class ContractTest(unittest.TestCase):
         self.assertNotIn('concurrency', workflow)
         self.assertEqual(set(workflow['jobs']), {'auto_review'})
         job = workflow['jobs']['auto_review']
-        self.assertEqual(job['uses'], 'sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@stable')
-        self.assertIn('auto-reviewer-shared.yaml@stable\n', caller)
+        # The own caller pins the previous release, so its file name is the one at that commit.
+        self.assertRegex(job['uses'],
+                         r'\Asentimony/github-workflows/\.github/workflows/(?:auto-reviewer-shared|shared-auto-reviewer)\.yaml@[0-9a-f]{40}\Z')
+        self.assertRegex(caller, r'(?:auto-reviewer-shared|shared-auto-reviewer)\.yaml@[0-9a-f]{40} # v\d+\.\d+\.\d+\n')
         self.assertNotIn('concurrency', job)
         self.assertEqual(job['secrets']['AUTO_REVIEWER_YNGWALD'],
                          '${{ secrets.AUTO_REVIEWER_YNGWALD }}')
@@ -184,7 +186,7 @@ class ContractTest(unittest.TestCase):
                 secret = ('AUTO_REVIEWER_TOKEN: ${{ secrets.SO_UPSTARS_PR_TOKEN }}'
                           if 'Unit tests' in expected else
                           'AUTO_REVIEWER_YNGWALD: ${{ secrets.AUTO_REVIEWER_YNGWALD }}')
-                self.assertIn('uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@stable\n', example + '\n')
+                self.assertRegex(example + '\n', r'uses: sentimony/github-workflows/\.github/workflows/shared-auto-reviewer\.yaml@[0-9a-f]{40} # v\d+\.\d+\.\d+\n')
                 self.assertIn(secret + '\n', example + '\n')
                 result = self.check(caller=example, expected=expected)
                 self.assertEqual(result.returncode, 0, result.stderr)

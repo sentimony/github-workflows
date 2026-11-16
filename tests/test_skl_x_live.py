@@ -12,7 +12,7 @@ import tarfile
 import tempfile
 import unittest
 
-from test_auto_reviewer_shared import step
+from test_shared_auto_reviewer import step
 
 SOURCE = 'https://github.com/sentimony/agentic-workflow'
 # The last tag with the plugins/aw/skills/ layout; installed by its full commit SHA.

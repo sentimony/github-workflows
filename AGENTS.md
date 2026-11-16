@@ -2,30 +2,32 @@
 
 ## Layout
 
-1. `.github/workflows/auto-reviewer-shared.yaml` - the reusable Auto Reviewer
-   (`workflow_call`): gate, read-only review, trusted publish, API-only thread resolver,
-   completion and merged summary. Repeated steps share YAML anchors
-   (`&review_actions_script`, `&write_review_helpers`): edit the anchored step, its aliases
-   follow. Helpers used by more than one script live in the `Write review helpers` module
-   (`auto_reviewer_lib`), not in copies. Every inline `python3` in it runs as
-   `python3 -I`.
-2. `.github/workflows/auto-reviewer.yaml` - this repository's own caller, on `@stable`.
-   `.github/workflows/promote-stable.yml` fast-forwards the `stable` branch to a released
-   commit of `main` with the deploy key in the `STABLE_DEPLOY_KEY` secret (`GITHUB_TOKEN`
-   cannot push commits that change workflow files); `tests/test_promote_stable.py` runs
-   its step against a local bare origin.
+1. `.github/workflows/shared-auto-reviewer.yaml` - the reusable Auto Reviewer
+   (`workflow_call`; named `auto-reviewer-shared.yaml` up to v0.0.16): gate, read-only review,
+   trusted publish, API-only thread resolver, completion and merged summary. Repeated steps share
+   YAML anchors (`&review_actions_script`, `&write_review_helpers`,
+   `&resolve_workflow_identity`): edit the anchored step, its aliases follow. Helpers used by
+   more than one script live in the `Write review helpers` module (`auto_reviewer_lib`), not in
+   copies. Every inline `python3` in it runs as `python3 -I`.
+2. `.github/workflows/auto-reviewer.yaml` - this repository's own caller, pinned to the full SHA
+   of the previous release with a `# vX.Y.Z` comment (and that release's file name).
+   `.github/workflows/tag-versions.yml` creates the annotated tag `vX.Y.Z` for every
+   `CHANGELOG.md` version without one, on the first commit of `main` that holds the heading,
+   with the deploy key in the `STABLE_DEPLOY_KEY` secret (`GITHUB_TOKEN` cannot push refs to
+   commits that change workflow files; the secret keeps its name); `tests/test_tag_versions.py`
+   runs its step against a local bare origin.
 3. `.github/workflows/ci.yml` - the `validate` job: the unit tests and a pinned actionlint.
    `.github/workflows/skl-x-live.yml` runs `tests/test_skl_x_live.py` with
    `AUTO_REVIEWER_LIVE=1` (weekly, on dispatch and on PRs that change the install step):
    the real skl-x install compared with `git archive`. Without the variable the test is
    skipped, so `validate` stays offline.
-4. `scripts/check_auto_reviewer_shared_contract.py` - the caller/callee contract checker
+4. `scripts/check_shared_auto_reviewer_contract.py` - the caller/callee contract checker
    (Ruby 3 or later).
-5. `tests/` - `step(name)` in `tests/test_auto_reviewer_shared.py` runs a step's real
+5. `tests/` - `step(name)` in `tests/test_shared_auto_reviewer.py` runs a step's real
    `run` script with fake `gh`, `npx` and `git`; test a new script step through it, not
-   through a copy. The README must keep exactly three `yaml` caller examples on `@stable`:
-   a test checks them against the contract.
-6. `AUTO_REVIEWER_SHARED_TRANSPORT.md` holds the draft, ledger and host actions contract;
+   through a copy. The README must keep exactly three `yaml` caller examples pinned as
+   `@<sha> # vX.Y.Z`: a test checks them against the contract.
+6. `SHARED_AUTO_REVIEWER_TRANSPORT.md` holds the draft, ledger and host actions contract;
    `README.md` the public contract and callers.
 
 ## Checks
@@ -40,16 +42,13 @@ against `.github/workflows/auto-reviewer.yaml` with `--required-ci-job validate`
    the commit title. Merging and tagging happen only on the owner's explicit request.
 2. Record every change in `CHANGELOG.md` under the next `## vX.Y.Z - YYYY-MM-DD` heading;
    versions take patch bumps. A version is released when its PR is merged and CI on `main`
-   is green: `Promote stable` then moves the `stable` branch to that commit, and callers on
-   `@stable` follow it. The moving branch is the owner's explicit choice, an accepted
-   trade-off and not a defect for review: a release reaches every caller, with its secrets,
-   without a change in the caller. A caller may still pin a full SHA with the version in a
-   comment (`@<sha> # vX.Y.Z`). No tag is needed; one goes on only at the owner's request,
-   and tags never move.
-3. A PR that changes the reusable workflow is reviewed and summarized by the released
-   version: the own caller is on `@stable`, which moves only after the merge. `stable`
-   moves forward only through `Promote stable`; moving it back is a manual push by an admin
-   after the owner's word.
+   is green: `Tag versions` then tags its commit, and callers pin the full SHA of that commit
+   with the version in a comment (`@<sha> # vX.Y.Z`), as third-party actions are pinned. The
+   pin lives only in the caller's `uses:` line. Tags never move. The `stable` branch and its
+   promotion were removed in v0.0.17; old callers on `@stable` keep the last commit it pointed at.
+3. A PR that changes the reusable workflow leaves the own caller on the previous released
+   commit, so the released version reviews and summarizes it. Move the caller to the new
+   commit in a separate PR after the merge.
 4. The Auto Reviewer format (footer, ledger, transport) belongs to this repository. The
    `cr-request` skill stays independent of its callers: put caller-specific rules in the
    workflow prompt or the transport contract, not in the skill.

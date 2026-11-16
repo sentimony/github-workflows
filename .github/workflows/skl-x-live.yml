@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - .github/workflows/auto-reviewer-shared.yaml
+      - .github/workflows/shared-auto-reviewer.yaml
       - .github/workflows/skl-x-live.yml
       - tests/test_skl_x_live.py
 permissions:

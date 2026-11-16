@@ -1,33 +1,44 @@
-# Auto Reviewer (Shared) Transport
+# Shared Auto Reviewer Transport
 
 This is the shared v1 contract for CI review transport, its durable GitHub ledger,
 and host disposition replies. The trusted host validates
 all reviewer output as data. The schema grants no token, write permission, or approval
 to the read-only reviewer.
 
-The reusable engine is `.github/workflows/auto-reviewer-shared.yaml`, named
-`Auto Reviewer (Shared)`. The reviewer writes the internal draft footer with separate
-workflow/ref spans and a Next step line; the review job rewrites those closing lines
+The reusable engine is `.github/workflows/shared-auto-reviewer.yaml` (`auto-reviewer-shared.yaml`
+up to v0.0.16), named `Shared Auto Reviewer`. The reviewer writes the internal draft footer with
+separate workflow/ref spans and a Next step line; the review job rewrites those closing lines
 deterministically (dropping any model-written ones), trusted publish validates them and renders the
-public comment. The public body shows the heading `## Readiness: Ready` (or the other
-validated readiness), the verdict table, one collapsed Details block, and a `Used:` footer.
-Headings are shared with the merged summary: `##` titles the comment, `###` is a visible
-section, `####` a section inside Details. Completion and history readers also accept the
-earlier public line `Readiness: **Ready**`.
-That footer links superscript skill/workflow versions, groups model and effort in one
-code span, and retains the durations, tokens and cost without a Next step line: `ci` is
-the time from the start of the triggering CI run to the publication, or `0 sec` when
-no CI run triggered the review; `model` is the measured agent step; with an unusable start
-the agent step stands alone, unlabelled. The ledger's `duration_seconds` stays the agent step.
-For a caller pinned to a full commit SHA the workflow link reads `# vX.Y.Z` (the comment
+public comment. The public body has no Markdown headings: it shows the bold line
+`**Readiness: Ready**` (or the other validated readiness), the verdict table, one collapsed
+Details block, and a `Used:` footer. A section name is a bold line on its own, in Details too
+(a heading in the draft's Details is rewritten as a bold line); the merged summary follows the
+same rule. Completion and history readers also accept the earlier public forms
+`Readiness: **Ready**` and the heading `## Readiness: Ready`.
+The footer is `Used: model `<model> <effort>` · skill `cr-request` <version> · workflow
+`shared-auto-reviewer` <version> · <tokens> tokens · $<cost>`: skill and workflow versions are plain
+linked text, tokens and cost plain, without durations and without a Next step line. Without
+usage data the model, tokens and cost are omitted. The ledger's `duration_seconds` stays the
+agent step, now `null` for a review with the new footer; the ledger's `run_id` is the Actions
+run that published the review.
+For a caller pinned to a full commit SHA the workflow link reads `vX.Y.Z` (the comment
 of the caller's `uses:` line, read from the caller file at the running commit and accepted
 only when the newest `CHANGELOG.md` heading at the pinned commit names the same version)
-and points to the pinned commit. For a caller on a branch (`@stable`) the link reads the
-newest `CHANGELOG.md` heading at the commit the branch resolved to (`job.workflow_sha`) and
-points to that commit. A tag, a missing comment, a mismatch and a failed read keep the ref
-as the link text.
-History readers accept both forms of the Used footer and the released split, combined
-and skill-only footers. The ledger marker and schema remain unchanged.
+and points to the pinned commit. For a caller on a branch the link reads the newest
+`CHANGELOG.md` heading at the commit the branch resolved to (`job.workflow_sha`) and points to
+that commit. A tag, a missing comment, a mismatch and a failed read keep the ref as the link text.
+History readers accept every earlier Used footer (`ci`/`model` durations, superscript versions,
+the released split, combined and skill-only footers). The ledger marker and schema remain
+unchanged.
+
+The merged summary comment (`<!-- claude-review summary -->`) is `**Review cycle summary**`, the
+counts table, `**Review usage**` with the columns Review, Model, Run time, Tokens and Cost, a
+bold `Total` row whose values are code spans, and the last line
+`Used: workflow `shared-auto-reviewer` vX.Y.Z`. Run time is the duration of the Actions run
+that published each review (the ledger's `run_id`; `GET /actions/runs/<id>`, `run_started_at`
+to `updated_at`, as the Actions UI shows it); for a run that has not completed (the current
+one) it is `run_started_at` to now. A review without a valid ledger or a run the API does not
+return is `unknown`. The two summary jobs request `actions: read` for this.
 
 Manual workflow dispatch accepts only `pr`. The `pr_number` field below belongs to
 the JSON transport and ledger schema and remains required.
@@ -153,7 +164,7 @@ stores one canonical object as JSON in its own review body's service comment:
 ```
 
 The marker is outside the single visible Details block and before the Used footer
-(or the closing footer lines in historical reviews). It adds no visible heading or second `<details>` block. Validate the
+(or the closing footer lines in historical reviews). It adds no heading or second `<details>` block. Validate the
 review's API author as `yngwald`, repository/PR, reviewed SHA, container ID equal to
 `published_review_id`, and both versions before importing it. Another author's marker
 or a marker on a different head cannot authorize an action on the current head.

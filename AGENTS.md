@@ -17,8 +17,8 @@
    commits that change workflow files; the secret keeps its name); `tests/test_tag_versions.py`
    runs its step against a local bare origin.
 3. `.github/workflows/ci.yml` - the `validate` job: the unit tests and a pinned actionlint.
-   `.github/workflows/skl-x-live.yml` runs `tests/test_skl_x_live.py` with
-   `AUTO_REVIEWER_LIVE=1` (weekly, on dispatch and on PRs that change the install step):
+   `.github/workflows/cr-request-live-install.yml` runs `tests/test_cr_request_live_install.py` with
+   `AUTO_REVIEWER_LIVE=1` (twice a day, on dispatch and on PRs that change the install step):
    the real skl-x install compared with `git archive`. Without the variable the test is
    skipped, so `validate` stays offline.
 4. `scripts/check_shared_auto_reviewer_contract.py` - the caller/callee contract checker
@@ -40,12 +40,16 @@ against `.github/workflows/auto-reviewer.yaml` with `--required-ci-job validate`
 
 1. Branches are `YYMMDDHHMM-dev-session`; PRs are squash-merged, and the PR title becomes
    the commit title. Merging and tagging happen only on the owner's explicit request.
-2. Record every change in `CHANGELOG.md` under the next `## vX.Y.Z - YYYY-MM-DD` heading;
-   versions take patch bumps. A version is released when its PR is merged and CI on `main`
-   is green: `Tag versions` then tags its commit, and callers pin the full SHA of that commit
-   with the version in a comment (`@<sha> # vX.Y.Z`), as third-party actions are pinned. The
-   pin lives only in the caller's `uses:` line. Tags never move. The `stable` branch and its
-   promotion were removed in v0.0.17; old callers on `@stable` keep the last commit it pointed at.
+2. Record a change to what callers run - `shared-auto-reviewer.yaml` and anything it executes at
+   review time - in `CHANGELOG.md` under the next `## vX.Y.Z - YYYY-MM-DD` heading; versions take
+   patch bumps. Service changes (CI, tests, the live install check, tag automation, docs, this
+   repository's own caller pin) get no `CHANGELOG.md` entry, no version and no tag: the PR title and
+   body are their record. Version readers and `Tag versions` parse the headings, so add none for
+   them. A version is released when its PR is merged and CI on `main` is green: `Tag versions` then
+   tags its commit, and callers pin the full SHA of that commit with the version in a comment
+   (`@<sha> # vX.Y.Z`), as third-party actions are pinned. The pin lives only in the caller's
+   `uses:` line. Tags never move. The `stable` branch and its promotion were removed in v0.0.17; old
+   callers on `@stable` keep the last commit it pointed at.
 3. A PR that changes the reusable workflow leaves the own caller on the previous released
    commit, so the released version reviews and summarizes it. Move the caller to the new
    commit in a separate PR after the merge.

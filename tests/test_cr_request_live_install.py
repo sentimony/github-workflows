@@ -1,7 +1,7 @@
 """Install cr-request with the real skl-x and compare it with git archive of the same ref.
 
-Skipped unless AUTO_REVIEWER_LIVE=1: it needs the network, npx and git. The skl-x CI
-workflow runs it on a schedule and on pull requests that change the install step.
+Skipped unless AUTO_REVIEWER_LIVE=1: it needs the network, npx and git. The cr-request live install
+workflow runs it twice a day and on pull requests that change the install step.
 """
 import io
 import os
@@ -52,7 +52,7 @@ def installed_skill(path):
 
 
 @unittest.skipUnless(os.environ.get('AUTO_REVIEWER_LIVE') == '1', 'set AUTO_REVIEWER_LIVE=1 to run')
-class SklXLiveInstallTest(unittest.TestCase):
+class CrRequestLiveInstallTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()

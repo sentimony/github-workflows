@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   auto_review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@b99649c6b5ed218797a1d75bd28aad353136f5b4 # v0.0.16
+    uses: sentimony/github-workflows/.github/workflows/shared-auto-reviewer.yaml@b9d8481a544803535311ca815216a3ca7dbc52de # v0.0.17
     with:
       required-ci-job: validate
       pr: ${{ inputs.pr || '' }}

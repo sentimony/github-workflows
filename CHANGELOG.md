@@ -1,8 +1,64 @@
 # Changelog
 
 One version covers every workflow in this repository. Each version lists its changes
-per workflow, newest first. Callers follow the `stable` branch, which moves to the commit
-of each version in `main`, or pin the full SHA of such a commit.
+per workflow, newest first. Callers pin the full SHA of the commit of a version, which its
+tag `vX.Y.Z` points to.
+
+## v0.0.17 - 2026-11-16
+
+### shared-auto-reviewer
+
+1. Renamed from `auto-reviewer-shared`: the file is `.github/workflows/shared-auto-reviewer.yaml`
+   (the workflow is named `Shared Auto Reviewer`), and the transport document, the contract
+   checker and the tests follow (`SHARED_AUTO_REVIEWER_TRANSPORT.md`). There is no copy under
+   the old name: a caller keeps `auto-reviewer-shared.yaml` while it pins a commit up to
+   `v0.0.16`, and changes the name together with the pin. Entries below `v0.0.17` keep the old
+   name as written. The reviewer's internal draft signature names the file
+   `shared-auto-reviewer.yaml`; history readers still accept the earlier names.
+2. No Markdown headings in a public comment, review or summary: a section name is a bold line
+   (`**Readiness: Ready**`, `**Review cycle summary**`, `**Review usage**`, and the section
+   names in Details). Headings that the draft holds in Details, ATX or setext, outside code,
+   are rewritten as bold lines, and the prompt asks for bold names. The completion step and
+   history readers accept every earlier public readiness form (`Readiness: **Ready**`,
+   `## Readiness: Ready`) and the new one.
+3. The `Used:` footer of a review has no durations and reads
+   ``Used: model `claude-sonnet-5-5 medium` · skill `cr-request` 0.0.23 · workflow `shared-auto-reviewer` v0.0.17 · 143,575 tokens · $0.1645``:
+   labels `model`, `skill` and `workflow`, names in code spans, plain linked versions (no
+   superscript, no `#`), plain tokens and cost; without usage data the model, tokens and cost are
+   omitted. A tag ref now shows as written (`v0.0.4`, before `0.0.4`). History readers keep
+   every footer of `v0.0.13`-`v0.0.16`. The ledger's `duration_seconds` stays the agent step and
+   is `null` for a review with the new footer.
+4. The merged summary has one `Run time` column in place of `CI time` and `Model time`: the
+   duration of the Actions run that published each review, read through the API from the
+   ledger's `run_id` (start to last update, as the Actions UI shows it). The run that builds the
+   summary is still in progress, so its round counts from the run's start to now; the summary
+   built when the PR merges has every run complete. A review without a valid ledger, or a run
+   the API no longer returns, shows `unknown`. `Total` stays bold and its values are code spans.
+   The last line is ``Used: workflow `shared-auto-reviewer` v0.0.17``, resolved like the review
+   footer. Both summary jobs request `actions: read`, which callers already grant. The workflow
+   identity step is shared by the review and both summary jobs.
+
+### tag-versions
+
+1. New workflow: after a green CI run on `main` (or on dispatch) it creates the annotated tag
+   `vX.Y.Z` for every `## vX.Y.Z` heading in `CHANGELOG.md` that has no tag, on the first
+   commit of `main` (first-parent history up to the CI-green commit) whose `CHANGELOG.md` holds
+   the heading. Several versions squashed into `main` between runs are all tagged, in order;
+   an existing tag is never moved or deleted (a plain push, no force). The push uses the
+   deploy key in `STABLE_DEPLOY_KEY`.
+
+### promote-stable
+
+1. Removed together with the `stable` branch it moved. Callers pin a full commit SHA with the
+   version in a comment (`@<sha> # vX.Y.Z`), as before `v0.0.15`; the commit of a version is the
+   one its tag points to. Callers still on `@stable` keep the last commit the branch pointed at
+   (`v0.0.16`) until they move to a pin.
+
+### auto-reviewer
+
+1. The repository's own caller pins the `v0.0.16` commit with the old file name
+   (`auto-reviewer-shared.yaml@<sha> # v0.0.16`); a follow-up change moves it to `v0.0.17`.
+   The README caller examples pin `shared-auto-reviewer.yaml` the same way.
 
 ## v0.0.16 - 2026-11-16
 

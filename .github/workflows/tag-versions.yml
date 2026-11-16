@@ -1,0 +1,93 @@
+name: Tag versions
+
+# Creates the annotated tag vX.Y.Z for every `## vX.Y.Z` heading in CHANGELOG.md that has no tag
+# yet, on the first commit of main (first-parent history) whose CHANGELOG.md holds the heading.
+# It runs after a green CI run on `main`, so several versions squashed into main between runs
+# (intermediate CI runs cancelled or skipped) are all tagged. An existing tag is never moved or
+# deleted.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full SHA of a commit in main whose history is tagged (empty - the tip of main)
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tag-versions
+
+jobs:
+  tag:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'
+      && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The tag push uses the deploy key: GITHUB_TOKEN cannot push refs to commits that change
+      # workflow files.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+          ssh-key: ${{ secrets.STABLE_DEPLOY_KEY }}
+      - name: Tag versions
+        shell: bash
+        env:
+          CANDIDATE: ${{ github.event.workflow_run.head_sha || inputs.sha }}
+        run: |
+          note() { echo "$1"; echo "$1" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
+          fail() { echo "::error::$1"; exit 1; }
+          candidate="${CANDIDATE:-$(git rev-parse origin/main)}"
+          [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || fail "Not a full commit SHA: $candidate"
+          git cat-file -e "${candidate}^{commit}" 2>/dev/null || fail "Unknown commit $candidate"
+          git merge-base --is-ancestor "$candidate" origin/main || fail "$candidate is not in main"
+          # The remote is the authority on existing tags: a tag there is never touched.
+          remote_tags=$(git ls-remote --tags origin 'refs/tags/v*') || fail "Cannot list the remote tags"
+          has_remote_tag() { grep -q -E "[[:space:]]refs/tags/$1\$" <<< "$remote_tags"; }
+          # The commits of main (first parent, oldest first) that change CHANGELOG.md: a heading first
+          # appears in one of them.
+          versions=()
+          commits=()
+          while read -r commit; do
+            [ -n "$commit" ] || continue
+            headings=$(git show "$commit:CHANGELOG.md" 2>/dev/null \
+              | sed -n -E 's/^## (v[0-9]+\.[0-9]+\.[0-9]+)( - .*)?$/\1/p') || true
+            while read -r version; do
+              [ -n "$version" ] || continue
+              case " ${versions[*]:-} " in
+                *" $version "*) ;;
+                *) versions+=("$version"); commits+=("$commit") ;;
+              esac
+            done <<< "$headings"
+          done < <(git log --first-parent --reverse --format=%H "$candidate" -- CHANGELOG.md)
+          created=0
+          failed=0
+          for i in "${!versions[@]}"; do
+            version="${versions[$i]}"
+            commit="${commits[$i]}"
+            if has_remote_tag "$version"; then
+              echo "$version already has a tag"
+              continue
+            fi
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              tag -a -m "$version" "$version" "$commit" || { echo "::error::Cannot create the tag $version"; failed=1; continue; }
+            # A plain push: an existing tag with another target is rejected, never moved.
+            if git push origin "refs/tags/$version:refs/tags/$version"; then
+              note "tag $version -> $commit"
+              created=$((created + 1))
+            else
+              echo "::error::Cannot push the tag $version"
+              failed=1
+            fi
+          done
+          [ "$failed" -eq 0 ] || exit 1
+          [ "$created" -gt 0 ] || note "No untagged version up to $candidate"

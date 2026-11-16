@@ -7,6 +7,12 @@ payload=json.load(sys.stdin) if '--input' in args else None
 with (root/'trace.jsonl').open('a') as f: f.write(json.dumps({'method':method,'endpoint':endpoint})+'\n')
 prefix='repos/owner/repo'; path=endpoint.split('?')[0]
 if path=='user': out={'login':'so-upstars'}
+elif path.startswith(prefix+'/actions/runs/'):
+    # A run id of 1000+N lasts N seconds; state['runs'] holds explicit runs; any other id is unknown to the API.
+    ident=int(path.rsplit('/',1)[1]); runs=state.get('runs',{})
+    if str(ident) in runs: out={'id':ident,**runs[str(ident)]}
+    elif ident>=1000: out={'id':ident,'status':'completed','run_started_at':'2026-11-10T00:00:00Z','updated_at':'2026-11-10T00:%02d:%02dZ'%(((ident-1000)//60)%60,(ident-1000)%60)}
+    else: print('run not found',file=sys.stderr); sys.exit(1)
 elif path==prefix+'/pulls/42': out={'number':42,'merged':state.get('merged',True)}
 elif path==prefix+'/pulls/42/reviews':
     page=int(endpoint.split('page=')[-1]); out=state['reviews'][(page-1)*100:page*100]

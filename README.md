@@ -24,30 +24,36 @@ The `skl-x` version moves with each release; the skill itself comes from the new
 `vX.Y.Z` tag of `sentimony/agentic-workflow` or the `REVIEW_SKILLS_REF` commit, must
 install as a plain directory without symbolic links, and must name its version.
 
-Published comments show readiness first, as the comment's heading, then the verdict
-table, a collapsed Details block, and a Used footer. Both comment kinds share one heading
-rule: `##` titles the comment (`## Readiness: Ready with fixes`, `## Review cycle summary`),
-`###` is a visible section (`### Review usage`), `####` a section inside Details.
+Published comments show readiness first, as a bold line (`**Readiness: Ready with fixes**`),
+then the verdict table, a collapsed Details block, and a Used footer. Neither comment kind has
+Markdown headings: a section name is a bold line on its own (`**Review cycle summary**`,
+`**Review usage**`, and the section names inside Details). Headings that the reviewer's draft
+holds in Details are rewritten as bold lines.
 
-The footer links skill and workflow versions in superscript, groups model and effort, and
-shows two durations, tokens and cost: `ci` is the whole path, from the start of the CI run
-that triggered the review to the publication, and `0 sec` for a review that no CI
-run triggered (a review request, a dispatch); `model` is the agent step alone. When the
-start is unusable, the footer shows the agent step without a label, as before. The merged summary lists each
-review with its model and effort in one code span and both durations (`CI time`,
-`Model time`) in code spans, an unmeasured value as plain `unknown`, and a bold Total row;
-reviews published before `v0.0.15` have no `CI time`. The workflow
-version reads `# vX.Y.Z`, linked to the commit that ran (`#` marks a version tied to a
-commit). For a caller on a branch such as `@stable` it is the newest `CHANGELOG.md` heading
-at the commit the branch resolved to for that run; when it cannot be read, the footer shows
-the branch name. For a caller pinned to a commit it is the comment of the caller's `uses:`
-line, which counts only when the newest `CHANGELOG.md` heading at that commit names the
-same version; without the comment, or on a mismatch, the footer shows the SHA. The public
-comment omits Next step; the reviewer's internal draft retains its validated contract. The
-workflow itself appends the draft's signature and, when the model's is missing or invalid,
-the Next step line, closes an unclosed Details block, and, when the draft still fails its
-structural validation, asks the model once to fix the listed errors before publish.
-History and cycle summaries continue to read earlier review formats.
+The footer reads, for example:
+`Used: model `claude-sonnet-5-5 medium` · skill `cr-request` [0.0.23](https://www.skills.sh/sentimony/agentic-workflow/cr-request) · workflow `shared-auto-reviewer` [v0.0.17](https://github.com/sentimony/github-workflows/commit/<sha>) · 143,575 tokens · $0.1645`.
+Model and effort come first in one code span, then the skill and the workflow with plain linked
+versions, then plain tokens and cost; without usage data the model, tokens and cost are omitted.
+The footer carries no durations. The merged summary has one `Run time` column: the duration
+of the Actions run that published each review, from the ledger's `run_id`, read through the API
+as the Actions UI shows it (start to last update). The run that builds the summary is still in
+progress, so its round counts from the run's start to now; the summary built when the PR
+merges has every run complete. A review without a valid ledger, or a run the API no longer
+returns, shows plain `unknown`. Measured values are code spans, `Total` is bold with its values
+in code spans, and the last line is `Used: workflow `shared-auto-reviewer` vX.Y.Z`. Both summary
+jobs need `actions: read`, which the callers below already grant.
+
+The workflow version reads `vX.Y.Z`, linked to the commit that ran. For a caller pinned to a
+commit it is the comment of the caller's `uses:` line, which counts only when the newest
+`CHANGELOG.md` heading at that commit names the same version; without the comment, or on a
+mismatch, the footer shows the SHA. For a caller on a branch it is the newest `CHANGELOG.md`
+heading at the commit the branch resolved to for that run. The public comment omits Next step;
+the reviewer's internal draft retains its validated contract. The workflow itself appends the
+draft's signature and, when the model's is missing or invalid, the Next step line, closes an
+unclosed Details block, and, when the draft still fails its structural validation, asks the
+model once to fix the listed errors before publish. History and cycle summaries continue to read
+earlier review formats: the `Used:` forms of v0.0.13-v0.0.16, the `## Readiness: X` heading,
+`Readiness: **X**`, and the `Reviewed with:` signatures.
 
 ### Contract
 
@@ -101,26 +107,26 @@ configuration validation still applies.
 
 ### Callers
 
-Callers reference `auto-reviewer-shared.yaml@stable`. `stable` is a branch that always
-points to a released commit of `main`: the `Promote stable` workflow fast-forwards it after
-a green CI run on `main` whose newest `CHANGELOG.md` version differs from the one at
-`stable`, so every caller follows a release without a change of its own. Its manual
-dispatch promotes the tip of `main` or a given commit of `main`. Rulesets let only
-repository admins, maintainers and the promotion deploy key update `stable`; only an admin
-can move it back or delete it. A caller that must not follow releases pins the full SHA of
-a commit in `main` and names its CHANGELOG version in a comment instead:
-`@<sha> # vX.Y.Z`.
+Callers pin `shared-auto-reviewer.yaml` to the full SHA of a commit in `main` and name its
+CHANGELOG version in a comment: `@<sha> # vX.Y.Z`. The pin lives only in the caller's `uses:`
+line. A caller can move to a commit as soon as it is merged; the commit of a version is the
+one its tag `vX.Y.Z` points to. The examples below show a placeholder SHA: replace it with
+`git rev-parse vX.Y.Z^{commit}` of the release you pin.
+The workflow was named `auto-reviewer-shared.yaml` up to `v0.0.16`; a caller keeps that name
+while it pins one of those commits and changes the name together with the pin.
 `workflow_run` uses the caller workflow
 definition on its default branch; pull request events use the PR branch copy.
 `workflow_dispatch` becomes available once the workflow exists on the default branch.
 Live equivalence requires runs against the referenced callee.
 
-Changes between versions are listed in [CHANGELOG.md](CHANGELOG.md). Tags up to `v0.0.8`
-exist and never move; later versions get a tag only on the owner's request.
+Changes between versions are listed in [CHANGELOG.md](CHANGELOG.md). The `Tag versions`
+workflow creates the annotated tag `vX.Y.Z` for each `CHANGELOG.md` version after a green CI
+run on `main`, on the first commit of `main` that holds the heading; a tag never moves.
 
 This repository's `.github/workflows/auto-reviewer.yaml`, named `Auto Reviewer`,
-references `.github/workflows/auto-reviewer-shared.yaml@stable` the same way, with the
-`validate` CI job. The reusable workflow is named `Auto Reviewer (Shared)`.
+pins the previous release the same way, with the `validate` CI job; a PR that changes the
+reusable workflow is reviewed by the released version, and a follow-up PR moves the pin to the new
+commit. The reusable workflow is named `Shared Auto Reviewer`.
 
 Configure Actions secrets in each consumer repository:
 
@@ -148,7 +154,7 @@ they do not need a repository secret named `YNGWALD_PR_TOKEN`.
 
 CI runs on branch pushes, pull requests, and manual dispatch. Tag pushes do not trigger it.
 
-The [transport contract](AUTO_REVIEWER_SHARED_TRANSPORT.md) defines the review draft, ledger,
+The [transport contract](SHARED_AUTO_REVIEWER_TRANSPORT.md) defines the review draft, ledger,
 and host actions.
 
 <details>
@@ -176,7 +182,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@stable
+    uses: sentimony/github-workflows/.github/workflows/shared-auto-reviewer.yaml@0123456789012345678901234567890123456789 # v0.0.17
     with:
       required-ci-job: validate
       pr: ${{ inputs.pr || '' }}
@@ -212,7 +218,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@stable
+    uses: sentimony/github-workflows/.github/workflows/shared-auto-reviewer.yaml@0123456789012345678901234567890123456789 # v0.0.17
     with:
       required-ci-job: check
       pr: ${{ inputs.pr || '' }}
@@ -248,7 +254,7 @@ permissions:
   statuses: write
 jobs:
   review:
-    uses: sentimony/github-workflows/.github/workflows/auto-reviewer-shared.yaml@stable
+    uses: sentimony/github-workflows/.github/workflows/shared-auto-reviewer.yaml@0123456789012345678901234567890123456789 # v0.0.17
     with:
       required-ci-jobs: |
         Lint
@@ -273,7 +279,7 @@ test needs the network and runs only with `AUTO_REVIEWER_LIVE=1`. To validate a 
 against this checkout, run:
 
 ```sh
-python3 scripts/check_auto_reviewer_shared_contract.py --workflow .github/workflows/auto-reviewer-shared.yaml --caller path/to/caller.yaml --required-ci-job validate
+python3 scripts/check_shared_auto_reviewer_contract.py --workflow .github/workflows/shared-auto-reviewer.yaml --caller path/to/caller.yaml --required-ci-job validate
 ```
 
 Use `check` for the SoundCloud caller; repeat `--required-ci-job` to require several jobs. The checker needs Ruby 3 or later; set `RUBY` to

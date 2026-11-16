@@ -18,7 +18,7 @@
    runs its step against a local bare origin.
 3. `.github/workflows/ci.yml` - the `validate` job: the unit tests and a pinned actionlint.
    `.github/workflows/cr-request-live-install.yml` runs `tests/test_cr_request_live_install.py` with
-   `AUTO_REVIEWER_LIVE=1` (weekly, on dispatch and on PRs that change the install step):
+   `AUTO_REVIEWER_LIVE=1` (twice a day, on dispatch and on PRs that change the install step):
    the real skl-x install compared with `git archive`. Without the variable the test is
    skipped, so `validate` stays offline.
 4. `scripts/check_shared_auto_reviewer_contract.py` - the caller/callee contract checker

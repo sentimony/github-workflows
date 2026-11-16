@@ -1,13 +1,13 @@
-name: skl-x live install
+name: cr-request live install
 on:
   schedule:
-    - cron: '17 5 * * 1'
+    - cron: '17 5,17 * * *'
   workflow_dispatch:
   pull_request:
     paths:
       - .github/workflows/shared-auto-reviewer.yaml
-      - .github/workflows/skl-x-live.yml
-      - tests/test_skl_x_live.py
+      - .github/workflows/cr-request-live-install.yml
+      - tests/test_cr_request_live_install.py
 permissions:
   contents: read
 jobs:
@@ -21,4 +21,4 @@ jobs:
       - name: Install cr-request with the real skl-x
         env:
           AUTO_REVIEWER_LIVE: '1'
-        run: python3 -m unittest discover -s tests -p 'test_skl_x_live.py' -v
+        run: python3 -m unittest discover -s tests -p 'test_cr_request_live_install.py' -v
